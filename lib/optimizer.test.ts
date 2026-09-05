@@ -1,0 +1,20 @@
+import assert from 'node:assert/strict';
+import { optimize, checks, defaults, metrics, assets } from './optimizer.ts';
+const initial=[35,25,20,10,7,3];
+const r=optimize(initial,defaults);
+assert.ok(r.feasible,'Demo must produce a feasible plan');
+assert.ok(checks(r.target,defaults).every(x=>x.ok));
+assert.ok(Math.abs(r.target.reduce((s,v)=>s+v,0)-100)<1e-8);
+assert.ok(r.target.every(v=>v>=0));
+assert.ok(metrics(r.target).cvar<metrics(initial).cvar);
+const changes=r.target.map((v,i)=>v-initial[i]);
+assert.ok(Math.abs(changes.reduce((s,v)=>s+v,0))<1e-8,'Trades must self-fund before fees');
+const gross=changes.reduce((s,v)=>s+Math.abs(v),0);
+assert.ok(Math.abs(gross/2-changes.filter(v=>v>0).reduce((s,v)=>s+v,0))<1e-8);
+assert.equal(r.cost,changes.reduce((s,v,i)=>s+Math.abs(v)*assets[i].cost/10000,0));
+assert.equal(optimize(initial,{...defaults,concentration:10}).feasible,false);
+assert.equal(optimize(r.target,defaults).hold,true,'Already optimized allocation must HOLD');
+assert.deepEqual(initial,[35,25,20,10,7,3]);
+for(let seed=1;seed<=30;seed++){const raw=assets.map((_,i)=>((seed*17+i*31)%97)+1);const sum=raw.reduce((s,v)=>s+v,0);const w=raw.map(v=>v/sum*100);const x=optimize(w,defaults);assert.ok(x.target.every(v=>v>=0));assert.ok(Math.abs(x.target.reduce((s,v)=>s+v,0)-100)<1e-6);if(x.feasible)assert.ok(checks(x.target,defaults).every(c=>c.ok));}
+console.log('Passed: feasibility, allocation conservation, long-only, risk reduction, balanced trades, turnover, costs, infeasible constraints, HOLD, immutability and 30 varied portfolios.');
+console.log('Demo target:',r.target,'Turnover:',gross/2,'Cost (Cr):',r.cost);
