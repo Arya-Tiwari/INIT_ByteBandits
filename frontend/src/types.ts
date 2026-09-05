@@ -131,8 +131,6 @@ export type CostBenefit = {
   transactionCostBps: number;
   transactionCost: number;
   turnoverValue: number;
-  estimatedBenefit: number;
-  benefitCostRatio: number;
   safetyScoreChange: number;
   expectedReturnChange: number;
   volatilityChange: number;
@@ -182,4 +180,3 @@ export function exportRebalanceCsv(rebalance: Rebalance): string {
     ),
   ].join("\n");
 }
-

@@ -82,6 +82,10 @@ class RouteCapitalResponse(StrictModel):
     remainingCapital: float
     updatedAssets: list[Asset]
     totalValue: float
+    liquidityBefore: float
+    liquidityAfter: float
+    liquidityTarget: float
+    liquidityRepaired: bool
 
 class PortfolioAllocationRequest(StrictModel):
     allocations: Optional[dict[str, float]] = None
@@ -198,7 +202,7 @@ class Trade(StrictModel):
 
 class RebalanceResult(StrictModel):
     minimumTradeAmount: float = 1000
-    objective: str = 'This risk-minimizing proposal seeks lower historical portfolio volatility, with a small preference for smaller allocation changes. It does not minimize the trades needed to repair breaches. It may use the full turnover budget when additional trading reduces risk.'
+    objective: str = 'Repair every Risk Firewall breach, then minimize historical portfolio variance and trading cost while keeping expected return within two percentage points of the input portfolio. The optimizer may use the available turnover budget when the risk reduction justifies it.'
 
     status: Literal['FEASIBLE', 'INFEASIBLE', 'NOT_FOUND']
     explanation: str

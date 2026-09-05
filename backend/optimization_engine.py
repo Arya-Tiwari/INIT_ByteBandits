@@ -12,6 +12,8 @@ from .models import RebalanceResult, Trade
 
 TRADE_LIQUIDITY_FLOOR = 70
 MINIMUM_TRADE_AMOUNT = 1000.0  # INR, including cash movements
+TRANSACTION_COST_RATE = 0.0015
+MAX_EXPECTED_RETURN_REDUCTION = 0.02
 
 
 def optimize(assets, returns, limits, original_capital=None, consumed_turnover=0):
@@ -24,6 +26,26 @@ def optimize(assets, returns, limits, original_capital=None, consumed_turnover=0
     w0 = np.array([a.currentValue/total for a in assets])
     n = len(assets)
     factor = total/original_capital
+    before=firewall.inspect_portfolio(assets,returns,limits,consumed_turnover)
+    expected_returns = np.array([a.expectedReturn for a in assets], dtype=float)
+    expected_return_floor = before.metrics.expectedReturn - MAX_EXPECTED_RETURN_REDUCTION
+
+    def unchanged_result():
+        trades=[Trade(assetId=a.id,name=a.name,action='HOLD',amount=0,
+            stressedWeight=float(w),targetWeight=float(w),targetValue=a.currentValue,
+            liquidityScore=a.liquidityScore,locked=a.liquidityScore < TRADE_LIQUIDITY_FLOOR)
+            for a,w in zip(assets,w0)]
+        return RebalanceResult(status='FEASIBLE',
+            objective='No repair is required because the input portfolio already passes every Risk Firewall control. The optimizer preserves the portfolio, uses no turnover and incurs no transaction cost.',
+            explanation='All configured controls already pass, so the safest cost-aware action is to hold the current allocation. No trades have been executed.',
+            trades=trades,assets=[a.model_copy(deep=True) for a in assets],risk=before,
+            firewallChanges=firewall.transitions(before,before),turnover=0,
+            cumulativeTurnover=consumed_turnover,totalValue=total,limits=limits,
+            minimumTradeAmount=MINIMUM_TRADE_AMOUNT,
+            costBenefit={'transactionCostBps':15.0,'transactionCost':0.0,'turnoverValue':0.0,
+                'safetyScoreChange':0.0,'expectedReturnChange':0.0,'volatilityChange':0.0})
+    if not any(control.status == 'BREACH' for control in before.controls):
+        return unchanged_result()
     locked = np.array([a.liquidityScore < TRADE_LIQUIDITY_FLOOR or (a.currentValue == 0 and a.assetClass != 'Cash') for a in assets])
     # Wiped-out securities cannot be purchased without a price model.
     # An exhausted cash balance remains a valid destination for sale proceeds.
@@ -47,6 +69,8 @@ def optimize(assets, returns, limits, original_capital=None, consumed_turnover=0
     add(row,-limits.minimumCashWeight,'Minimum cash')
     row=np.zeros(2*n); row[n:]=.5*factor
     add(row,limits.maximumTurnover-consumed_turnover,'Turnover budget')
+    row=np.zeros(2*n); row[:n]=-expected_returns
+    add(row,-expected_return_floor,'Expected return floor')
     equality=np.zeros((1,2*n)); equality[0,:n]=1
     objective=np.r_[np.zeros(n),np.ones(n)]
     def linear(active):
@@ -82,8 +106,12 @@ def optimize(assets, returns, limits, original_capital=None, consumed_turnover=0
     def report(w): return firewall.inspect_portfolio(portfolio(w),returns,limits,consumed_turnover+turnover(w)*factor)
     def margins(w):
         # Shared Firewall defines every risk policy; the solver does not reimplement VaR/CVaR.
-        return np.asarray(firewall.policy_margins(report(w).metrics,limits))
-    def objective_risk(w): return float(w@covariance@w)+.001*float(np.sum((w-w0)**2))
+        policy = firewall.policy_margins(report(w).metrics,limits)
+        return np.asarray([*policy, float(w @ expected_returns - expected_return_floor)])
+    def objective_risk(w):
+        # One-way turnover is also the transaction-cost base, so this term makes
+        # the risk objective explicitly cost aware instead of merely smoothing weights.
+        return float(w@covariance@w) + TRANSACTION_COST_RATE * turnover(w)
     candidates = [w0,lp.x[:n]]
     for start in (lp.x[:n],w0):
         result=minimize(objective_risk,start,
@@ -127,7 +155,9 @@ def optimize(assets, returns, limits, original_capital=None, consumed_turnover=0
         w=remove_dust(candidate)
         if w is None: continue
         checked=report(w)
-        if not any(c.status=='BREACH' for c in checked.controls): accepted.append((objective_risk(w),w,checked))
+        if (not any(c.status=='BREACH' for c in checked.controls)
+                and float(w @ expected_returns) + firewall.TOLERANCE >= expected_return_floor):
+            accepted.append((objective_risk(w),w,checked))
     if not accepted:
         nearest=min(candidates,key=lambda w:float(np.square(np.minimum(margins(w),0)).sum()))
         checked=report(np.maximum(nearest,0)/np.maximum(nearest,0).sum())
@@ -141,25 +171,20 @@ def optimize(assets, returns, limits, original_capital=None, consumed_turnover=0
         trades.append(Trade(assetId=a.id,name=a.name,action='HOLD' if abs(delta)<.01 else 'BUY' if delta>0 else 'SELL',
             amount=abs(delta),stressedWeight=a.currentValue/total,targetWeight=b.currentWeight,targetValue=b.currentValue,
             liquidityScore=a.liquidityScore,locked=bool(lock)))
-    before=firewall.inspect_portfolio(assets,returns,limits,consumed_turnover)
     turnover_pct = turnover(w)
     turnover_val = round(turnover_pct * total, 2)
-    tx_cost = round(turnover_val * 0.0015, 2)
+    tx_cost = round(turnover_val * TRANSACTION_COST_RATE, 2)
     safety_score_delta = round(before.riskScore - checked.riskScore, 2)
     ret_delta = round(checked.metrics.expectedReturn - before.metrics.expectedReturn, 4)
     vol_delta = round(checked.metrics.volatility - before.metrics.volatility, 4)
-    est_benefit = round(max(0.0, safety_score_delta / 100.0 * total * 0.05 + max(0.0, ret_delta) * total), 2)
-    bc_ratio = round(est_benefit / tx_cost, 2) if tx_cost > 0 else 999.0
     cost_benefit = {
         "transactionCostBps": 15.0,
         "transactionCost": tx_cost,
         "turnoverValue": turnover_val,
-        "estimatedBenefit": est_benefit,
-        "benefitCostRatio": bc_ratio,
         "safetyScoreChange": safety_score_delta,
         "expectedReturnChange": ret_delta,
         "volatilityChange": vol_delta
     }
-    return RebalanceResult(status='FEASIBLE',minimumTradeAmount=MINIMUM_TRADE_AMOUNT, explanation='Sub-threshold trades were frozen and the allocation was re-solved for funding and policy compliance. A funded proposal passes every Risk Firewall limit. Sales fund purchases; no external capital is added. Holdings with liquidity below 70 and wiped-out positions remain locked. No trades have been executed.',
+    return RebalanceResult(status='FEASIBLE',minimumTradeAmount=MINIMUM_TRADE_AMOUNT, explanation=f'Sub-threshold trades were frozen and the allocation was re-solved for funding and policy compliance. The proposal minimizes historical variance plus estimated transaction cost while keeping expected return at or above {expected_return_floor:.2%}. Sales fund purchases; no external capital is added. No trades have been executed.',
         trades=trades,assets=proposed,risk=checked,firewallChanges=firewall.transitions(before,checked),
         turnover=turnover_pct,cumulativeTurnover=checked.metrics.turnover,totalValue=total,limits=limits,costBenefit=cost_benefit)

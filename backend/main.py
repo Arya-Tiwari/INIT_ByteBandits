@@ -3,6 +3,7 @@ import json
 from threading import Lock
 import pandas as pd
 from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
 from uuid import uuid4
 from collections import OrderedDict
 from .models import Asset, Portfolio, PortfolioAllocationRequest, RiskLimits, RiskReport, Scenario, ScenarioRequest, CustomRequest, WithdrawalRequest, SimulationResult, RebalanceResult, RouteCapitalRequest, RouteCapitalResponse
@@ -51,9 +52,11 @@ def update_portfolio(request: PortfolioAllocationRequest):
         if missing: detail.append('Missing holding IDs: ' + ', '.join(missing))
         if unknown: detail.append('Unknown holding IDs: ' + ', '.join(unknown))
         raise HTTPException(status_code=422, detail='; '.join(detail))
+    allocation_total = sum(allocations.values())
+    normalized = {asset_id: weight / allocation_total for asset_id, weight in allocations.items()}
     updated = [asset.model_copy(update={
-        'currentWeight': allocations[asset.id],
-        'currentValue': total * allocations[asset.id],
+        'currentWeight': normalized[asset.id],
+        'currentValue': total * normalized[asset.id],
     }) for asset in current]
     with _lock: _assets = [asset.model_copy(deep=True) for asset in updated]
     return Portfolio(assets=updated,totalValue=total,historyObservations=len(RETURNS))
@@ -66,14 +69,30 @@ def route_capital(request: RouteCapitalRequest):
     limits = limits_snapshot()
     report = evaluate(current, RETURNS, limits)
     min_liq = limits.minimumLiquidityScore
-    needed_liq = max(0.0, (min_liq - report.metrics.liquidityScore) / 100.0 * total)
+    liquidity_before = report.metrics.liquidityScore
+    new_total = total + request.incomingCapital
+    # Capital not used for repair follows the existing allocation and therefore
+    # retains the current liquidity score. Solve the weighted-average equation
+    # for the amount that must be placed in 100/100 Cash to reach the floor.
+    needed_liq = 0.0 if liquidity_before >= min_liq else (
+        (min_liq - liquidity_before) * new_total / (100.0 - liquidity_before)
+    )
     routed = min(request.incomingCapital, needed_liq)
     remaining = request.incomingCapital - routed
 
+    # Deterministic Allocation Rule:
+    # 1. 'routed' amount goes directly to Cash (or liquid holdings) to repair liquidity deficit.
+    # 2. 'remaining' capital is allocated proportionally across ALL holdings based on existing weights.
+    # Total added across all assets equals incomingCapital exactly; new total equals total + incomingCapital.
     updated = []
-    new_total = total + request.incomingCapital
+    cash_assets = [a for a in current if a.assetClass == 'Cash']
+    if routed > 0 and not cash_assets:
+        raise HTTPException(status_code=409, detail='Liquidity repair requires a Cash holding, but none is configured.')
+    cash_total = sum(a.currentValue for a in cash_assets)
     for a in current:
-        add_val = request.incomingCapital if a.assetClass == 'Cash' else 0.0
+        cash_share = (a.currentValue / cash_total if cash_total > 0 else 1 / len(cash_assets)) if a.assetClass == 'Cash' else 0.0
+        proportional_share = a.currentValue / total if total > 0 else 1 / len(current)
+        add_val = routed * cash_share + remaining * proportional_share
         new_val = a.currentValue + add_val
         updated.append(a.model_copy(update={
             'currentValue': new_val,
@@ -81,7 +100,28 @@ def route_capital(request: RouteCapitalRequest):
         }))
     with _lock:
         _assets = [a.model_copy(deep=True) for a in updated]
-    return RouteCapitalResponse(routedToLiquidity=routed, remainingCapital=remaining, updatedAssets=updated, totalValue=new_total)
+    liquidity_after = evaluate(updated, RETURNS, limits).metrics.liquidityScore
+    return RouteCapitalResponse(routedToLiquidity=routed, remainingCapital=remaining,
+        updatedAssets=updated, totalValue=new_total, liquidityBefore=liquidity_before,
+        liquidityAfter=liquidity_after, liquidityTarget=min_liq,
+        liquidityRepaired=liquidity_after + 1e-8 >= min_liq)
+
+@app.post('/api/reset')
+def reset_demo():
+    """Restore AEGIS to original hackathon demo baseline state."""
+    global _assets, _limits
+    with _lock:
+        _assets = [asset.model_copy(deep=True) for asset in ASSETS]
+        _limits = RiskLimits()
+        _simulations.clear()
+    current = assets_snapshot()
+    limits = limits_snapshot()
+    return {
+        "status": "RESET",
+        "message": "AEGIS demo state restored to original baseline.",
+        "portfolio": Portfolio(assets=current, totalValue=sum(a.currentValue for a in current), historyObservations=len(RETURNS)),
+        "limits": limits
+    }
 
 @app.get('/api/risk',response_model=RiskReport)
 def risk(): return evaluate(assets_snapshot(),RETURNS,limits_snapshot())
@@ -145,3 +185,7 @@ def rebalance(simulation_id: str):
         raise HTTPException(status_code=409,detail='Risk limits changed. Run the scenario again before requesting a rebalance.')
     return optimize(saved.stressedAssets, RETURNS, current_limits,
         original_capital=saved.originalPortfolioValue, consumed_turnover=saved.riskAfter.metrics.turnover)
+
+DIST_DIR = Path(__file__).parent.parent / 'frontend' / 'dist'
+if DIST_DIR.exists():
+    app.mount('/', StaticFiles(directory=str(DIST_DIR), html=True), name='static')

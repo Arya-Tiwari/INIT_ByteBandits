@@ -3,8 +3,8 @@
  * Portfolio, risk, limits and optimization values always come from the API.
  */
 export const REPORT_ASSUMPTIONS = {
-  transactionCostRate: 0.001,
-  transactionCostLabel: "10 bps illustrative rate",
+  transactionCostRate: 0.0015,
+  transactionCostLabel: "15 bps illustrative rate",
   dailyChange: null as number | null,
 };
 
@@ -18,4 +18,3 @@ export const DEFAULT_LIMITS: Record<string, number> = {
   minimumCashWeight: 0.05,
   maximumTurnover: 0.2,
 };
-

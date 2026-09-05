@@ -22,12 +22,12 @@ import {
   type PageKey,
 } from "./ReportPages";
 import RiskLab from "./RiskLab";
-import type { Limits, Portfolio, Rebalance, Risk, Scenario } from "./types";
+import type { Limits, Portfolio, Rebalance, Risk, Scenario, Simulation } from "./types";
 
 const money = (value: number) => `₹${(value / 1e7).toFixed(2)} Cr`;
 
 const pageNames: Record<PageKey, string> = {
-  home: "Executive Control Room",
+  home: "",
   portfolio: "Portfolio",
   risk: "Risk Firewall",
   optimize: "Portfolio Optimization",
@@ -54,8 +54,11 @@ export default function App() {
   const [portfolio, setPortfolio] = useState<Portfolio>();
   const [risk, setRisk] = useState<Risk>();
   const [limits, setLimits] = useState<Limits>();
+  const [appetites, setAppetites] = useState<Record<string, Limits>>({});
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [proposal, setProposal] = useState<Rebalance>();
+  const [activeSimulation, setActiveSimulation] = useState<Simulation>();
+  const [stressProposal, setStressProposal] = useState<Rebalance>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [optimizing, setOptimizing] = useState(false);
@@ -73,8 +76,14 @@ export default function App() {
   async function runOptimization() {
     setOptimizing(true);
     try {
-      setProposal(await api<Rebalance>("/optimize", {}));
-      recordEvent("Optimization completed", "A funded target allocation was rechecked by the Risk Firewall.");
+      if (activeSimulation) {
+        const next = await api<Rebalance>(`/simulate/${activeSimulation.simulationId}/rebalance`, {});
+        setStressProposal(next);
+        recordEvent("Stress optimization completed", `${activeSimulation.scenarioName} was rebalanced from its stressed holdings and rechecked by the Risk Firewall.`);
+      } else {
+        setProposal(await api<Rebalance>("/optimize", {}));
+        recordEvent("Optimization completed", "A funded target allocation was rechecked by the Risk Firewall.");
+      }
     } catch (cause) {
       setError((cause as Error).message);
     } finally {
@@ -82,20 +91,48 @@ export default function App() {
     }
   }
 
+  async function resetDemo() {
+    setBusy(true);
+    setError("");
+    try {
+      const res = await api<{ status: string; message: string; portfolio: Portfolio; limits: Limits }>("/reset", {});
+      setPortfolio(res.portfolio);
+      setActiveSimulation(undefined);
+      setStressProposal(undefined);
+      setLimits(res.limits);
+      setRisk(await api<Risk>("/risk"));
+      setScenarios(await api<Scenario[]>("/simulations"));
+      try {
+        setProposal(await api<Rebalance>("/optimize", {}));
+      } catch {
+        setProposal(undefined);
+      }
+      recordEvent("Demo reset", "Portfolio, controls and simulation state were restored to the original AEGIS baseline.");
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function load() {
     setBusy(true);
     setError("");
     try {
-      const [nextPortfolio, nextRisk, nextLimits, nextScenarios] = await Promise.all([
+      const [nextPortfolio, nextRisk, nextLimits, nextScenarios, nextAppetites] = await Promise.all([
         api<Portfolio>("/portfolio"),
         api<Risk>("/risk"),
         api<Limits>("/risk/limits"),
         api<Scenario[]>("/simulations"),
+        api<Record<string, Limits>>("/risk/appetites").catch(() => ({})),
       ]);
       setPortfolio(nextPortfolio);
       setRisk(nextRisk);
       setLimits(nextLimits);
       setScenarios(nextScenarios);
+      setAppetites(nextAppetites);
+      setActiveSimulation(undefined);
+      setStressProposal(undefined);
       setLastAnalysis(new Date().toLocaleTimeString("en-IN", { hour12: false }));
       try {
         setProposal(await api<Rebalance>("/optimize", {}));
@@ -131,6 +168,8 @@ export default function App() {
     try {
       const saved = await api<Limits>("/risk/limits", nextLimits);
       setLimits(saved);
+      setActiveSimulation(undefined);
+      setStressProposal(undefined);
       setRisk(await api<Risk>("/risk"));
       setProposal(await api<Rebalance>("/optimize", {}));
       recordEvent("Risk controls updated", "Portfolio metrics and the optimizer were recalculated under the new limits.");
@@ -148,6 +187,8 @@ export default function App() {
     try {
       const updated = await api<Portfolio>("/portfolio", payload);
       setPortfolio(updated);
+      setActiveSimulation(undefined);
+      setStressProposal(undefined);
       const [nextRisk, nextScenarios, nextProposal] = await Promise.all([
         api<Risk>("/risk"),
         api<Scenario[]>("/simulations"),
@@ -166,6 +207,7 @@ export default function App() {
   }
 
   const breachCount = risk?.controls.filter((control) => control.status === "BREACH").length ?? 0;
+  const currentDateStr = new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }).toUpperCase();
 
   return (
     <div className="app">
@@ -191,7 +233,7 @@ export default function App() {
       <main>
         <header>
           <div className="header-context"><strong>{pageNames[page]}</strong><span>PORTFOLIO / AEG-001</span></div>
-          <div className="header-actions"><span className="as-of">AS OF 05 SEP 2026 · 09:30 IST</span><span className="demo">DEMO / LOCAL</span><Button className="run-analysis" disabled={busy} onClick={() => void load()}><RefreshCw size={15} />Run analysis</Button></div>
+          <div className="header-actions"><span className="as-of">AS OF {currentDateStr} · {lastAnalysis} IST</span><span className="demo">DEMO / LOCAL</span><Button className="run-analysis" disabled={busy} onClick={() => void load()}><RefreshCw size={15} />Run analysis</Button></div>
         </header>
         <div className="control-status">
           <span><i className="status-led safe" /> HISTORICAL DATA · {portfolio?.historyObservations ?? 756} OBS</span>
@@ -205,18 +247,18 @@ export default function App() {
             <section className="loading-report">{error ? "Start the local backend on port 8000, then retry." : "Loading portfolio and risk calculations…"}</section>
           ) : (
             <>
-              {page === "home" && <OverviewPage portfolio={portfolio} risk={risk} proposal={proposal} latestEvent={events[0]} navigate={navigate} />}
-              {page === "portfolio" && <PortfolioPage portfolio={portfolio} proposal={proposal} busy={busy} save={savePortfolio} />}
-              {page === "risk" && <RiskPage risk={risk} limits={limits} busy={busy} save={saveLimits} />}
-              {page === "optimize" && <OptimizationPage portfolio={portfolio} risk={risk} proposal={proposal} busy={optimizing} run={() => void runOptimization()} navigate={navigate} />}
-              {page === "rebalance" && <RecommendationsPage portfolio={portfolio} risk={risk} proposal={proposal} navigate={navigate} />}
+              {page === "home" && <OverviewPage portfolio={portfolio} risk={risk} proposal={proposal} events={events} navigate={navigate} />}
+              {page === "portfolio" && <PortfolioPage portfolio={portfolio} proposal={proposal} busy={busy} save={savePortfolio} onReset={resetDemo} onRecordEvent={recordEvent} onReload={load} />}
+              {page === "risk" && <RiskPage risk={risk} limits={limits} appetites={appetites} busy={busy} save={saveLimits} />}
+              {page === "optimize" && <OptimizationPage portfolio={portfolio} risk={risk} proposal={activeSimulation ? stressProposal : proposal} simulation={activeSimulation} busy={optimizing} run={() => void runOptimization()} navigate={navigate} />}
+              {page === "rebalance" && <RecommendationsPage portfolio={portfolio} risk={risk} proposal={activeSimulation ? stressProposal : proposal} simulation={activeSimulation} navigate={navigate} />}
               {page === "simulation" && (
                 <>
                   <div className="page-title simulation-title">
                     <div><h1>Scenario &amp; Optimisation Review</h1><p>Shock the holdings. Trace the breaches. Test a funded response.</p></div>
                     <div className="capital"><span>Current portfolio value</span><strong>{money(portfolio.totalValue)}</strong><small>{portfolio.assets.length} assets · {new Set(portfolio.assets.map((asset) => asset.assetClass)).size} asset classes</small></div>
                   </div>
-                  <div id="stress-lab"><RiskLab portfolio={portfolio} scenarios={scenarios} onEvent={recordEvent} /></div>
+                  <div id="stress-lab"><RiskLab portfolio={portfolio} scenarios={scenarios} onEvent={recordEvent} onSimulation={(result) => { setActiveSimulation(result); setStressProposal(undefined); }} onProposal={setStressProposal} /></div>
                 </>
               )}
             </>

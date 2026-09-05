@@ -1,12 +1,10 @@
 @import "tailwindcss";
 :root {
   font-family:
-    Inter,
-    ui-sans-serif,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
+    "SFMono-Regular",
+    Consolas,
+    "Liberation Mono",
+    monospace;
   color: #1c3040;
   background: #f3f6f8;
   font-synthesis: none;

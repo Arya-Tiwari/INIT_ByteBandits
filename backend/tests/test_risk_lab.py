@@ -13,9 +13,9 @@ from backend.optimization_engine import optimize
 client=TestClient(app)
 @pytest.fixture(autouse=True)
 def reset():
-    client.post('/api/risk/limits',json=RiskLimits().model_dump())
+    client.post('/api/reset')
     yield
-    client.post('/api/risk/limits',json=RiskLimits().model_dump())
+    client.post('/api/reset')
 
 def custom(body):
     response=client.post('/api/simulate/custom',json=body)
@@ -168,8 +168,8 @@ def test_minimum_trades_are_removed_from_holdings_and_rechecked(scenario):
     proposal = optimize(s.stressedAssets, RETURNS, s.limits, s.originalPortfolioValue)
     assert proposal.status == 'FEASIBLE'
     assert proposal.minimumTradeAmount == 1000
-    assert 'risk-minimizing' in proposal.objective
-    assert 'full turnover budget' in proposal.objective
+    assert 'historical portfolio variance and trading cost' in proposal.objective
+    assert 'expected return' in proposal.objective
     for old, new, trade in zip(s.stressedAssets, proposal.assets, proposal.trades):
         actual = new.currentValue - old.currentValue
         assert abs(actual) == pytest.approx(trade.amount, abs=.01)
@@ -186,8 +186,7 @@ def test_minimum_trades_are_removed_from_holdings_and_rechecked(scenario):
     assert not any(c.status == 'BREACH' for c in checked.controls)
     assert [a.model_dump() for a in s.stressedAssets] == baseline
     if scenario == 'market-crash':
-        for ticker in ['gold', 'intl']:
-            assert next(t for t in proposal.trades if t.assetId == ticker).action == 'HOLD'
+        assert next(t for t in proposal.trades if t.assetId == 'intl').action == 'HOLD'
 
 
 def test_threshold_cannot_turn_an_unfunded_repair_into_success():
@@ -197,3 +196,153 @@ def test_threshold_cannot_turn_an_unfunded_repair_into_success():
     assert proposal.status == 'NOT_FOUND'
     assert proposal.trades == [] and proposal.risk is None
     assert 'minimum-trade threshold' in proposal.explanation
+
+
+def test_route_capital_compliant_liquidity():
+    # Make cash high so liquidity score is well above limit
+    client.post('/api/reset')
+    baseline = client.get('/api/portfolio').json()
+    old_total = baseline['totalValue']
+    inc = 10_000_000.0  # ₹1 Cr
+    resp = client.post('/api/portfolio/route-capital', json={'incomingCapital': inc})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data['totalValue'] == pytest.approx(old_total + inc)
+    assert data['routedToLiquidity'] == pytest.approx(0)
+    assert data['remainingCapital'] == pytest.approx(inc)
+    assert sum(a['currentValue'] for a in data['updatedAssets']) == pytest.approx(old_total + inc)
+    assert sum(a['currentWeight'] for a in data['updatedAssets']) == pytest.approx(1.0)
+    cash_asset = next(a for a in data['updatedAssets'] if a['assetClass'] == 'Cash')
+    old_cash = next(a for a in baseline['assets'] if a['assetClass'] == 'Cash')
+    # Cash should NOT receive all incoming capital when liquidity is already compliant
+    assert cash_asset['currentValue'] < old_cash['currentValue'] + inc
+    assert cash_asset['currentValue'] == pytest.approx(old_cash['currentValue'] + inc * old_cash['currentWeight'])
+
+
+def test_route_capital_liquidity_deficit():
+    # Set high weight in low-liquidity asset (REIT = 45) so portfolio liquidity falls below 70
+    client.post('/api/reset')
+    current = client.get('/api/portfolio').json()
+    allocs = {a['id']: (0.90 if a['id'] == 'reit' else 0.10 / (len(current['assets']) - 1)) for a in current['assets']}
+    client.post('/api/portfolio', json={'allocations': allocs})
+
+    inc = 5_000_000.0  # ₹50 Lakhs
+    resp = client.post('/api/portfolio/route-capital', json={'incomingCapital': inc})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data['routedToLiquidity'] > 0
+    assert data['routedToLiquidity'] + data['remainingCapital'] == pytest.approx(inc)
+    assert sum(a['currentValue'] for a in data['updatedAssets']) == pytest.approx(data['totalValue'])
+    assert sum(a['currentWeight'] for a in data['updatedAssets']) == pytest.approx(1.0)
+    assert all(a['currentValue'] >= 0 for a in data['updatedAssets'])
+    assert data['liquidityBefore'] < data['liquidityTarget']
+    assert data['liquidityAfter'] > data['liquidityBefore']
+    assert not data['liquidityRepaired']
+
+    # Verify mutation affects subsequent /api/portfolio and /api/risk
+    after_port = client.get('/api/portfolio').json()
+    assert after_port['totalValue'] == pytest.approx(data['totalValue'])
+    after_risk = client.get('/api/risk').json()
+    assert after_risk['metrics']['liquidityScore'] == pytest.approx(data['liquidityAfter'])
+
+
+def test_route_capital_exactly_repairs_liquidity_when_funding_is_sufficient():
+    current = client.get('/api/portfolio').json()
+    allocs = {a['id']: (0.90 if a['id'] == 'reit' else 0.10 / (len(current['assets']) - 1)) for a in current['assets']}
+    client.post('/api/portfolio', json={'allocations': allocs})
+    data = client.post('/api/portfolio/route-capital', json={'incomingCapital': 500_000_000}).json()
+    assert data['liquidityRepaired']
+    assert data['liquidityAfter'] == pytest.approx(data['liquidityTarget'], abs=1e-7)
+    assert data['routedToLiquidity'] < 500_000_000
+    assert data['routedToLiquidity'] + data['remainingCapital'] == pytest.approx(500_000_000)
+
+
+def test_near_tolerance_allocations_are_normalized_to_reconcile():
+    current = client.get('/api/portfolio').json()
+    allocations = {a['id']: a['currentWeight'] * .9995 for a in current['assets']}
+    data = client.post('/api/portfolio', json={'allocations': allocations, 'totalValue': 500_000_000}).json()
+    assert sum(a['currentWeight'] for a in data['assets']) == pytest.approx(1)
+    assert sum(a['currentValue'] for a in data['assets']) == pytest.approx(data['totalValue'])
+
+
+def test_route_capital_invalid_input():
+    assert client.post('/api/portfolio/route-capital', json={'incomingCapital': 0}).status_code == 422
+    assert client.post('/api/portfolio/route-capital', json={'incomingCapital': -100}).status_code == 422
+
+
+def test_risk_appetites():
+    resp = client.get('/api/risk/appetites')
+    assert resp.status_code == 200
+    appetites = resp.json()
+    assert 'CONSERVATIVE' in appetites
+    assert 'BALANCED' in appetites
+    assert 'GROWTH' in appetites
+
+    # Test applying preset
+    cons = appetites['CONSERVATIVE']
+    set_resp = client.post('/api/risk/limits', json=cons)
+    assert set_resp.status_code == 200
+    assert set_resp.json()['riskAppetite'] == 'CONSERVATIVE'
+
+    # Verify firewall check uses new limits
+    risk_resp = client.get('/api/risk').json()
+    assert any(c['limit'] == cons['maxPortfolioVolatility'] for c in risk_resp['controls'] if c['controlName'] == 'maxPortfolioVolatility')
+
+
+def test_operating_mode():
+    client.post('/api/reset')
+    r = client.get('/api/risk').json()
+    assert r['operatingMode'] in ('NORMAL', 'CAUTION', 'DEFENSIVE')
+
+    # Trigger CAUTION mode with breach
+    tight_limits = RiskLimits(maxSingleAssetWeight=0.05).model_dump()
+    client.post('/api/risk/limits', json=tight_limits)
+    r_breach = client.get('/api/risk').json()
+    assert r_breach['operatingMode'] in ('CAUTION', 'DEFENSIVE')
+
+
+def test_optimizer_cost_benefit_output():
+    client.post('/api/reset')
+    s = simulate(ASSETS, RETURNS, RiskLimits(), scenario_id='market-crash')
+    proposal = optimize(s.stressedAssets, RETURNS, s.limits, s.originalPortfolioValue)
+    assert proposal.status == 'FEASIBLE'
+    cb = proposal.costBenefit
+    assert cb is not None
+    for field in ['transactionCostBps', 'transactionCost', 'turnoverValue', 'safetyScoreChange', 'expectedReturnChange', 'volatilityChange']:
+        assert field in cb
+        assert np.isfinite(cb[field])
+    assert 'estimatedBenefit' not in cb and 'benefitCostRatio' not in cb
+    assert cb['transactionCostBps'] == 15.0
+    assert cb['transactionCost'] == pytest.approx(cb['turnoverValue'] * 0.0015, abs=0.01)
+    assert cb['expectedReturnChange'] >= -0.02001
+
+
+def test_optimizer_holds_when_no_firewall_repair_is_required():
+    growth = RiskLimits(maxSingleAssetWeight=.35, maxAssetClassWeight=.65,
+        minimumLiquidityScore=60, minimumCashWeight=.03, maximumTurnover=.30,
+        maxPortfolioVolatility=.22, maxVaR=.03, maxCVaR=.04, riskAppetite='GROWTH')
+    proposal = optimize(ASSETS, RETURNS, growth, sum(a.currentValue for a in ASSETS))
+    assert proposal.status == 'FEASIBLE'
+    assert proposal.turnover == 0
+    assert proposal.costBenefit['transactionCost'] == 0
+    assert all(trade.action == 'HOLD' for trade in proposal.trades)
+    assert [a.model_dump() for a in proposal.assets] == [a.model_dump() for a in ASSETS]
+    assert 'already passes' in proposal.objective
+
+
+def test_demo_reset_endpoint():
+    # Mutate portfolio & limits
+    client.post('/api/risk/limits', json=RiskLimits(maxPortfolioVolatility=0.05).model_dump())
+    client.post('/api/portfolio/route-capital', json={'incomingCapital': 10_000_000})
+
+    # Reset
+    reset_resp = client.post('/api/reset')
+    assert reset_resp.status_code == 200
+    reset_data = reset_resp.json()
+    assert reset_data['status'] == 'RESET'
+
+    # Verify baseline state restored
+    p = client.get('/api/portfolio').json()
+    assert p['totalValue'] == pytest.approx(500_000_000.0)
+    l = client.get('/api/risk/limits').json()
+    assert l['maxPortfolioVolatility'] == 0.16

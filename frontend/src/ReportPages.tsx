@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { api } from "./api";
 import {
   ArrowRight,
   Check,
@@ -23,7 +24,7 @@ import {
 } from "recharts";
 import { Button } from "./components/ui/button";
 import { DEFAULT_LIMITS, REPORT_ASSUMPTIONS } from "./reportData";
-import { exportRebalanceCsv, type Asset, type Limits, type Portfolio, type Rebalance, type Risk } from "./types";
+import { exportRebalanceCsv, type Asset, type Limits, type Portfolio, type Rebalance, type Risk, type Simulation } from "./types";
 
 export type PageKey =
   | "home"
@@ -170,7 +171,7 @@ function AllocationFigure({ portfolio }: { portfolio: Portfolio }) {
   );
 }
 
-export function OverviewPage({ portfolio, risk, proposal, latestEvent, navigate }: { portfolio: Portfolio; risk: Risk; proposal?: Rebalance; latestEvent?: DecisionEvent; navigate: (page: PageKey) => void }) {
+export function OverviewPage({ portfolio, risk, proposal, events, navigate }: { portfolio: Portfolio; risk: Risk; proposal?: Rebalance; events: DecisionEvent[]; navigate: (page: PageKey) => void }) {
   const breaches = risk.controls.filter((control) => control.status === "BREACH").length;
   const optimizedRisk = proposal?.risk?.riskScore;
   const improvement = optimizedRisk == null ? null : (risk.riskScore - optimizedRisk) / risk.riskScore;
@@ -178,9 +179,13 @@ export function OverviewPage({ portfolio, risk, proposal, latestEvent, navigate 
   const mode = risk.operatingMode ?? (breaches ? "CAUTION" : "NORMAL");
 
   return (
-    <div className="report-page">
+    <div className="report-page home-page-container">
       <div className="overview-hero">
-        <PageHeader eyebrow="AEGIS" title="Capital, under control." description="Automated portfolio risk monitoring, optimization and stress-response controls." />
+        <div className="home-brand-hero">
+          <span className="home-eyebrow">ASSET & CAPITAL CONTROL ENGINE</span>
+          <h1 className="home-aegis-title">AEGIS</h1>
+          <p className="home-subtitle">Automated Asset & Capital Optimization Control Engine</p>
+        </div>
         <div className="hero-capital">
           <span>Total portfolio value</span>
           <strong>{money(portfolio.totalValue)}</strong>
@@ -209,15 +214,42 @@ export function OverviewPage({ portfolio, risk, proposal, latestEvent, navigate 
           <div className="report-actions"><Button variant="outline" onClick={() => navigate("simulation")}>Run stress test</Button><Button onClick={() => navigate("optimize")}>Optimize portfolio <ArrowRight size={16} /></Button></div>
         </section>
       </div>
-      <section className="report-section latest-intervention"><SectionHeader index="03" title="Latest intervention" note={latestEvent?.time ?? "No activity"} /><div><span>{latestEvent?.title ?? "Monitoring active"}</span><p>{latestEvent?.detail ?? "AEGIS is ready to analyze the next portfolio decision."}</p></div></section>
+      <section className="report-section latest-intervention"><SectionHeader index="03" title="Decision trace" note={`${events.length} session event${events.length === 1 ? "" : "s"}`} />{events.map((event) => <div key={`${event.time}-${event.title}`}><span>{event.time} · {event.title}</span><p>{event.detail}</p></div>)}</section>
       <section className="report-section"><SectionHeader index="04" title="Portfolio allocation" note="Current capital by broad asset group" /><AllocationFigure portfolio={portfolio} /></section>
     </div>
   );
 }
 
-export function PortfolioPage({ portfolio, proposal, busy, save }: { portfolio: Portfolio; proposal?: Rebalance; busy: boolean; save: (payload: { allocations?: Record<string, number>; totalValue?: number }) => Promise<void> }) {
+export function PortfolioPage({
+  portfolio,
+  proposal,
+  busy,
+  save,
+  onReset,
+  onRecordEvent,
+  onReload,
+}: {
+  portfolio: Portfolio;
+  proposal?: Rebalance;
+  busy: boolean;
+  save: (payload: { allocations?: Record<string, number>; totalValue?: number }) => Promise<void>;
+  onReset?: () => Promise<void>;
+  onRecordEvent?: (title: string, detail: string) => void;
+  onReload?: () => Promise<void>;
+}) {
   const [draft, setDraft] = useState<Record<string, number>>({});
   const [totalCapCr, setTotalCapCr] = useState<number>(portfolio.totalValue / 1e7);
+  const [incomingCapCr, setIncomingCapCr] = useState<number>(1.0);
+  const [routeResult, setRouteResult] = useState<{
+    incomingCapital: number;
+    routedToLiquidity: number;
+    remainingCapital: number;
+    totalValue: number;
+    liquidityBefore: number;
+    liquidityAfter: number;
+    liquidityTarget: number;
+    liquidityRepaired: boolean;
+  } | null>(null);
   const [search, setSearch] = useState("");
 
   useEffect(() => {
@@ -239,29 +271,99 @@ export function PortfolioPage({ portfolio, proposal, busy, save }: { portfolio: 
     await save({ allocations: draft, totalValue });
   }
 
+  async function handleRouteCapital() {
+    if (incomingCapCr <= 0) return;
+    const incVal = incomingCapCr * 1e7;
+    try {
+      const res = await api<{
+        routedToLiquidity: number;
+        remainingCapital: number;
+        totalValue: number;
+        updatedAssets: Asset[];
+        liquidityBefore: number;
+        liquidityAfter: number;
+        liquidityTarget: number;
+        liquidityRepaired: boolean;
+      }>("/portfolio/route-capital", { incomingCapital: incVal });
+
+      setRouteResult({
+        incomingCapital: incVal,
+        routedToLiquidity: res.routedToLiquidity,
+        remainingCapital: res.remainingCapital,
+        totalValue: res.totalValue,
+        liquidityBefore: res.liquidityBefore,
+        liquidityAfter: res.liquidityAfter,
+        liquidityTarget: res.liquidityTarget,
+        liquidityRepaired: res.liquidityRepaired,
+      });
+
+      if (onReload) await onReload();
+      if (onRecordEvent) {
+        onRecordEvent(
+          "New capital routed",
+          `AEGIS evaluated liquidity before allocating ₹${incomingCapCr.toFixed(2)} Cr of incoming capital.`
+        );
+      }
+    } catch (err) {
+      alert((err as Error).message);
+    }
+  }
+
   return (
     <div className="report-page">
-      <PageHeader eyebrow="PORTFOLIO HOLDINGS" title="Current asset inventory & capital setup" description="Configure total portfolio capital and manage individual holding allocation weights." />
+      <PageHeader eyebrow="PORTFOLIO HOLDINGS" title="Current asset inventory & capital setup" description="Configure total portfolio capital, route new incoming funds, and manage allocation weights." />
       
-      <section className="report-section" style={{ marginBottom: "1.5rem" }}>
-        <SectionHeader index="00" title="Portfolio Total Capital Setup" note="Set custom portfolio value in ₹ Crores (1 Cr = ₹10,000,000)" />
-        <div style={{ display: "flex", gap: "1.5rem", alignItems: "center", marginTop: "0.5rem" }}>
-          <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-            <span style={{ fontSize: "0.85rem", color: "#666" }}>Total Portfolio Capital (₹ Cr)</span>
-            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+      <div className="report-two-column" style={{ marginBottom: "1.5rem" }}>
+        <section className="report-section">
+          <SectionHeader index="00" title="Portfolio Total Capital Setup" note="Set custom portfolio value in ₹ Crores (1 Cr = ₹10,000,000)" />
+          <div style={{ display: "flex", gap: "1rem", alignItems: "flex-end", marginTop: "0.5rem" }}>
+            <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+              <span style={{ fontSize: "0.85rem", color: "#666" }}>Total Capital (₹ Cr)</span>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <input
+                  type="number"
+                  step="0.5"
+                  min="0.1"
+                  value={totalCapCr}
+                  onChange={(e) => setTotalCapCr(Number(e.target.value))}
+                  style={{ width: "130px", padding: "6px 12px", borderRadius: "6px", border: "1px solid #ccc", fontWeight: "600" }}
+                />
+                <span style={{ fontWeight: "600" }}>Cr</span>
+              </div>
+            </label>
+          </div>
+        </section>
+
+        <section className="report-section">
+          <SectionHeader index="RC" title="Route New Capital" note="AEGIS checks liquidity requirements before allocating newly available capital." />
+          <div style={{ display: "flex", gap: "1rem", alignItems: "flex-end", marginTop: "0.5rem" }}>
+            <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+              <span style={{ fontSize: "0.85rem", color: "#666" }}>Incoming Capital (₹ Cr)</span>
               <input
                 type="number"
                 step="0.5"
-                min="0.1"
-                value={totalCapCr}
-                onChange={(e) => setTotalCapCr(Number(e.target.value))}
-                style={{ width: "140px", padding: "6px 12px", borderRadius: "6px", border: "1px solid #ccc", fontWeight: "600", fontSize: "1rem" }}
+                min="0.01"
+                value={incomingCapCr}
+                onChange={(e) => setIncomingCapCr(Number(e.target.value))}
+                style={{ width: "130px", padding: "6px 12px", borderRadius: "6px", border: "1px solid #ccc", fontWeight: "600" }}
               />
-              <span style={{ fontWeight: "600" }}>Cr (₹{(totalCapCr * 1e7).toLocaleString("en-IN")})</span>
+            </label>
+            <Button disabled={busy || incomingCapCr <= 0} onClick={() => void handleRouteCapital()}>
+              {busy ? "Routing…" : "Route Capital"}
+            </Button>
+          </div>
+
+          {routeResult && (
+            <div className="report-metric-row four compact" style={{ marginTop: "1rem" }}>
+              {metricValue("Incoming Capital", money(routeResult.incomingCapital), "Newly available funds")}
+              {metricValue("Routed to Liquidity", money(routeResult.routedToLiquidity), "Deficit repair to Cash")}
+              {metricValue("Remaining Capital", money(routeResult.remainingCapital), "Proportionally allocated")}
+              {metricValue("New Portfolio Value", money(routeResult.totalValue), "Updated total")}
             </div>
-          </label>
-        </div>
-      </section>
+          )}
+          {routeResult && <p className={routeResult.liquidityRepaired ? "positive" : "negative"}>Liquidity moved from {routeResult.liquidityBefore.toFixed(1)} to {routeResult.liquidityAfter.toFixed(1)} / 100. Required floor: {routeResult.liquidityTarget.toFixed(1)}. {routeResult.liquidityRepaired ? "The floor is now satisfied." : "The available capital was insufficient to restore the floor."}</p>}
+        </section>
+      </div>
 
       <div className="report-section-head">
         <div><span>01</span><h2>Holdings ({portfolio.assets.length})</h2></div>
@@ -309,15 +411,34 @@ export function PortfolioPage({ portfolio, proposal, busy, save }: { portfolio: 
       </div>
       <div className="sticky-form-actions">
         <div><span>Total allocation: <strong>{pct(totalWeight, 1)}</strong> · Total Capital: <strong>₹{totalCapCr.toFixed(2)} Cr</strong></span></div>
-        <Button disabled={busy || Math.abs(totalWeight - 1) > 0.002 || totalCapCr <= 0} onClick={() => void handleSave()}>
-          {busy ? "Saving…" : "Save Portfolio & Recalculate"}
-        </Button>
+        <div style={{ display: "flex", gap: "0.75rem" }}>
+          {onReset && (
+            <Button variant="outline" type="button" disabled={busy} onClick={() => void onReset()}>
+              Reset Demo
+            </Button>
+          )}
+          <Button disabled={busy || Math.abs(totalWeight - 1) > 0.001 || totalCapCr <= 0} onClick={() => void handleSave()}>
+            {busy ? "Saving…" : "Save Portfolio & Recalculate"}
+          </Button>
+        </div>
       </div>
     </div>
   );
 }
 
-export function RiskPage({ risk, limits, busy, save }: { risk: Risk; limits: Limits; busy: boolean; save: (limits: Limits) => Promise<void> }) {
+export function RiskPage({
+  risk,
+  limits,
+  appetites,
+  busy,
+  save,
+}: {
+  risk: Risk;
+  limits: Limits;
+  appetites?: Record<string, Limits>;
+  busy: boolean;
+  save: (limits: Limits) => Promise<void>;
+}) {
   const mode = risk.operatingMode ?? "NORMAL";
   return (
     <div className="report-page">
@@ -360,7 +481,7 @@ export function RiskPage({ risk, limits, busy, save }: { risk: Risk; limits: Lim
         <section className="report-section"><SectionHeader index="02" title="Risk contribution" /><div className="risk-bars">{risk.components.map((component) => <div key={component.name}><span>{component.name}</span><div><i style={{ width: `${component.normalizedScore}%` }} /></div><b>{component.contribution.toFixed(1)} pts</b></div>)}</div></section>
         <section className="report-section explanation-report"><SectionHeader index="03" title="Why the risk is high" />{risk.explanations.map((explanation, index) => <p key={index}><span>{String(index + 1).padStart(2, "0")}</span>{explanation}</p>)}</section>
       </div>
-      <ControlsPage limits={limits} busy={busy} save={save} embedded />
+      <ControlsPage limits={limits} appetites={appetites} busy={busy} save={save} embedded />
     </div>
   );
 }
@@ -372,31 +493,34 @@ function planMetrics(portfolio: Portfolio, risk: Risk, proposal?: Rebalance) {
   return { target, expectedReturn, cost: traded * REPORT_ASSUMPTIONS.transactionCostRate };
 }
 
-export function OptimizationPage({ portfolio, risk, proposal, busy, run, navigate }: { portfolio: Portfolio; risk: Risk; proposal?: Rebalance; busy: boolean; run: () => void; navigate: (page: PageKey) => void }) {
-  const plan = planMetrics(portfolio, risk, proposal);
-  const current = allocations(portfolio.assets);
+export function OptimizationPage({ portfolio, risk, proposal, simulation, busy, run, navigate }: { portfolio: Portfolio; risk: Risk; proposal?: Rebalance; simulation?: Simulation; busy: boolean; run: () => void; navigate: (page: PageKey) => void }) {
+  const sourcePortfolio = simulation ? { ...portfolio, assets: simulation.stressedAssets, totalValue: simulation.stressedPortfolioValue } : portfolio;
+  const sourceRisk = simulation?.riskAfter ?? risk;
+  const plan = planMetrics(sourcePortfolio, sourceRisk, proposal);
+  const current = allocations(sourcePortfolio.assets);
   const target = allocations(plan.target);
   const comparison = current.map((row) => ({ name: row.name, Current: row.weight * 100, Target: (target.find((item) => item.name === row.name)?.weight ?? row.weight) * 100 }));
   const cb = proposal?.costBenefit;
+  const bpsLabel = cb ? `${cb.transactionCostBps} bps` : "Calculated when optimization is run";
 
   return (
     <div className="report-page">
-      <PageHeader eyebrow="CAPITAL OPTIMIZATION" title="Recommended allocation" description="A funded comparison of the current portfolio and the optimizer's policy-compliant target." />
+      <PageHeader eyebrow={simulation ? `STRESSED PORTFOLIO · ${simulation.scenarioName}` : "CAPITAL OPTIMIZATION"} title="Recommended allocation" description={simulation ? "A funded target generated from the saved stressed holdings and rechecked against the same Risk Firewall limits." : "A funded comparison of the current portfolio and the optimizer's policy-compliant target."} />
       <div className="optimization-strip six">
-        <div><span>Risk score</span><strong>{risk.riskScore.toFixed(1)} <ArrowRight /> {proposal?.risk?.riskScore.toFixed(1) ?? "—"}</strong></div>
-        <div><span>Expected return</span><strong>{pct(risk.metrics.expectedReturn)} <ArrowRight /> {proposal?.risk ? pct(plan.expectedReturn) : "—"}</strong></div>
-        <div><span>Volatility</span><strong>{pct(risk.metrics.volatility)} <ArrowRight /> {proposal?.risk ? pct(proposal.risk.metrics.volatility) : "—"}</strong></div>
-        <div><span>Sharpe ratio</span><strong>{risk.metrics.sharpeRatio.toFixed(2)} <ArrowRight /> {proposal?.risk ? proposal.risk.metrics.sharpeRatio.toFixed(2) : "—"}</strong></div>
-        <div><span>Liquidity</span><strong>{risk.metrics.liquidityScore.toFixed(1)} <ArrowRight /> {proposal?.risk?.metrics.liquidityScore.toFixed(1) ?? "—"}</strong></div>
-        <div><span>Estimated transaction cost</span><strong>{proposal ? money(cb?.transactionCost ?? plan.cost) : "—"}</strong><small>{cb ? `15 bps (${pct(proposal.turnover)} turnover)` : REPORT_ASSUMPTIONS.transactionCostLabel}</small></div>
+        <div><span>Risk score</span><strong>{sourceRisk.riskScore.toFixed(1)} <ArrowRight /> {proposal?.risk?.riskScore.toFixed(1) ?? "—"}</strong></div>
+        <div><span>Expected return</span><strong>{pct(sourceRisk.metrics.expectedReturn)} <ArrowRight /> {proposal?.risk ? pct(plan.expectedReturn) : "—"}</strong></div>
+        <div><span>Volatility</span><strong>{pct(sourceRisk.metrics.volatility)} <ArrowRight /> {proposal?.risk ? pct(proposal.risk.metrics.volatility) : "—"}</strong></div>
+        <div><span>Sharpe ratio</span><strong>{sourceRisk.metrics.sharpeRatio.toFixed(2)} <ArrowRight /> {proposal?.risk ? proposal.risk.metrics.sharpeRatio.toFixed(2) : "—"}</strong></div>
+        <div><span>Liquidity</span><strong>{sourceRisk.metrics.liquidityScore.toFixed(1)} <ArrowRight /> {proposal?.risk?.metrics.liquidityScore.toFixed(1) ?? "—"}</strong></div>
+        <div><span>Estimated transaction cost</span><strong>{proposal ? money(cb?.transactionCost ?? plan.cost) : "—"}</strong><small>{cb ? `${cb.transactionCostBps} bps (${pct(proposal.turnover)} turnover)` : bpsLabel}</small></div>
       </div>
       {cb && (
         <section className="report-section cost-benefit-card">
-          <SectionHeader index="00" title="Cost / Benefit & Trade-off Analysis" note="Quantified rebalance efficiency" />
+          <SectionHeader index="00" title="Cost & trade-off analysis" note="Measured changes from the input allocation" />
           <div className="report-metric-row four">
-            {metricValue("Est. Transaction Cost", money(cb.transactionCost), `15 bps on ${money(cb.turnoverValue)}`)}
-            {metricValue("Est. Rebalance Benefit", money(cb.estimatedBenefit), "Capital protection + yield delta")}
-            {metricValue("Benefit / Cost Ratio", cb.benefitCostRatio.toFixed(2), cb.benefitCostRatio >= 1 ? "Efficient (B/C ≥ 1.0)" : "Caution (Low B/C)")}
+            {metricValue("Est. Transaction Cost", money(cb.transactionCost), `${cb.transactionCostBps} bps on ${money(cb.turnoverValue)}`)}
+            {metricValue("Expected Return Delta", `${cb.expectedReturnChange >= 0 ? "+" : ""}${pct(cb.expectedReturnChange)}`, "Historical weighted return")}
+            {metricValue("Volatility Delta", `${cb.volatilityChange >= 0 ? "+" : ""}${pct(cb.volatilityChange)}`, "Historical annualized volatility")}
             {metricValue("Risk Score Delta", `${cb.safetyScoreChange > 0 ? "−" : "+"}${Math.abs(cb.safetyScoreChange).toFixed(1)} pts`, "Lower score = safer")}
           </div>
         </section>
@@ -414,10 +538,12 @@ function limitsValue(value: number | undefined, percentage: boolean) {
   return percentage ? pct(value) : value.toFixed(0);
 }
 
-export function RecommendationsPage({ portfolio, risk, proposal, navigate }: { portfolio: Portfolio; risk: Risk; proposal?: Rebalance; navigate: (page: PageKey) => void }) {
+export function RecommendationsPage({ portfolio, risk, proposal, simulation, navigate }: { portfolio: Portfolio; risk: Risk; proposal?: Rebalance; simulation?: Simulation; navigate: (page: PageKey) => void }) {
+  const sourcePortfolio = simulation ? { ...portfolio, assets: simulation.stressedAssets, totalValue: simulation.stressedPortfolioValue } : portfolio;
+  const sourceRisk = simulation?.riskAfter ?? risk;
   const trades = proposal?.trades ?? [];
   const actions = trades.filter((trade) => trade.action !== "HOLD");
-  const reduction = proposal?.risk ? (risk.riskScore - proposal.risk.riskScore) / risk.riskScore : 0;
+  const reduction = proposal?.risk && sourceRisk.riskScore ? (sourceRisk.riskScore - proposal.risk.riskScore) / sourceRisk.riskScore : 0;
   const cb = proposal?.costBenefit;
   const cost = cb?.transactionCost ?? (actions.reduce((sum, trade) => sum + trade.amount, 0) * REPORT_ASSUMPTIONS.transactionCostRate);
 
@@ -436,7 +562,7 @@ export function RecommendationsPage({ portfolio, risk, proposal, navigate }: { p
 
   return (
     <div className="report-page">
-      <PageHeader eyebrow="REBALANCE" title="AEGIS intervention plan" description="BUY, SELL and HOLD instructions generated from the funded optimizer target and verified by the Risk Firewall." />
+      <PageHeader eyebrow={simulation ? `STRESSED PORTFOLIO · ${simulation.scenarioName}` : "REBALANCE"} title="AEGIS intervention plan" description="BUY, SELL and HOLD instructions generated from the funded optimizer target and verified by the Risk Firewall." />
       <div className="recommendation-summary">
         <div><strong>{actions.length}</strong><span>portfolio actions</span></div>
         <div><strong>{pct(reduction, 1)}</strong><span>risk-score improvement</span></div>
@@ -449,7 +575,7 @@ export function RecommendationsPage({ portfolio, risk, proposal, navigate }: { p
         <>
           <section className="report-section intervention-summary">
             <SectionHeader index="01" title="Intervention summary" />
-            <p>AEGIS recommends {actions.length} capital movements. Portfolio volatility moves from <b>{pct(risk.metrics.volatility)}</b> to <b>{pct(proposal.risk?.metrics.volatility ?? risk.metrics.volatility)}</b>, and active breaches move from <b>{risk.controls.filter((control) => control.status === "BREACH").length}</b> to <b>{proposal.risk?.controls.filter((control) => control.status === "BREACH").length ?? 0}</b>.</p>
+            <p>AEGIS recommends {actions.length} capital movements. Portfolio volatility moves from <b>{pct(sourceRisk.metrics.volatility)}</b> to <b>{pct(proposal.risk?.metrics.volatility ?? sourceRisk.metrics.volatility)}</b>, and active breaches move from <b>{sourceRisk.controls.filter((control) => control.status === "BREACH").length}</b> to <b>{proposal.risk?.controls.filter((control) => control.status === "BREACH").length ?? 0}</b>.</p>
           </section>
           <section className="report-section">
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -458,7 +584,7 @@ export function RecommendationsPage({ portfolio, risk, proposal, navigate }: { p
             </div>
             <div className="recommendation-list">
               {trades.map((trade, index) => {
-                const asset = portfolio.assets.find((item) => item.id === trade.assetId);
+                const asset = sourcePortfolio.assets.find((item) => item.id === trade.assetId);
                 const reason = trade.action === "SELL" ? `${trade.name} is reduced to repair concentration or risk pressure within the configured limits.` : trade.action === "BUY" ? `${trade.name} receives funded capital to improve diversification, liquidity or portfolio stability.` : `${trade.name} remains unchanged because no trade is required under the optimized allocation.`;
                 return (
                   <article key={trade.assetId}>
@@ -475,8 +601,7 @@ export function RecommendationsPage({ portfolio, risk, proposal, navigate }: { p
               })}
             </div>
             <div style={{ display: "flex", gap: "1rem", marginTop: "1rem" }}>
-              <Button variant="outline" onClick={downloadCsv}><Download size={16} />Download Rebalance Plan (CSV)</Button>
-              <Button variant="outline" onClick={() => navigate("simulation")}>Apply to Simulation <ArrowRight size={16} /></Button>
+              <Button variant="outline" onClick={() => navigate("simulation")}>Open Simulation <ArrowRight size={16} /></Button>
             </div>
           </section>
         </>
@@ -492,13 +617,27 @@ const limitGroups = [
   { title: "Optimization", keys: ["maximumTurnover"] },
 ];
 
-export function ControlsPage({ limits, busy, save, embedded = false }: { limits: Limits; busy: boolean; save: (limits: Limits) => Promise<void>; embedded?: boolean }) {
+export function ControlsPage({
+  limits,
+  appetites,
+  busy,
+  save,
+  embedded = false,
+}: {
+  limits: Limits;
+  appetites?: Record<string, Limits>;
+  busy: boolean;
+  save: (limits: Limits) => Promise<void>;
+  embedded?: boolean;
+}) {
   const [draft, setDraft] = useState<Limits>(limits);
   const [saved, setSaved] = useState(false);
   useEffect(() => setDraft(limits), [limits]);
 
+  const activeAppetites = appetites && Object.keys(appetites).length ? appetites : RISK_APPETITES;
+
   async function applyAppetite(appetiteKey: string) {
-    const preset = RISK_APPETITES[appetiteKey];
+    const preset = activeAppetites[appetiteKey];
     if (preset) {
       const next = { ...draft, ...preset };
       setDraft(next);
@@ -517,7 +656,7 @@ export function ControlsPage({ limits, busy, save, embedded = false }: { limits:
       <div className="report-section" style={{ marginBottom: "1.5rem" }}>
         <SectionHeader index="P" title="Risk Appetite Presets" note="Select a pre-configured risk profile" />
         <div style={{ display: "flex", gap: "0.75rem", marginTop: "0.5rem" }}>
-          {["CONSERVATIVE", "BALANCED", "GROWTH"].map((appetite) => (
+          {Object.keys(activeAppetites).map((appetite) => (
             <Button
               key={appetite}
               type="button"
