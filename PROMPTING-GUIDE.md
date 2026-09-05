@@ -30,7 +30,7 @@ Verify: tighten each rule independently and confirm the breach changes.
 Verify: targets total 100%, remain non-negative, satisfy every limit, and change when constraints change. A 10% maximum for each of six assets is infeasible.
 
 ## 6. Generate trades and costs
-> For each asset, delta = target weight minus current weight. Positive delta means BUY, negative means SELL, and zero means HOLD. Trade INR = absolute decimal delta × portfolio INR. One-way turnover = 0.5 × sum of absolute decimal deltas. Gross traded value counts both buys and sells. Estimated cost = sum of absolute trade INR × per-asset basis points / 10,000. Show current/target percentages, trade amount, fee, and reason. Export the displayed plan to CSV. State whether weights are gross or net of costs.
+> For each asset, delta = target weight minus current weight. Positive delta means BUY, negative means SELL, and zero means HOLD. Trade INR = absolute decimal delta × portfolio INR. One-way turnover = 0.5 × sum of absolute decimal deltas. Gross traded value counts both buys and sells. Estimated cost = sum of absolute trade INR × per-asset basis points / 10,000. Show current/target percentages, trade amount, fee, and reason. Export the displayed plan as a readable PDF. State whether weights are gross or net of costs.
 
 Verify: a 10 percentage-point shift from one asset to another means 10% turnover and ₹20Cr gross traded on a ₹100Cr portfolio. At 10 bps per side, total fees are ₹2 lakh. Buys equal sells before fees.
 
@@ -59,5 +59,5 @@ Verify: each explanation matches the numbers and current inputs.
 3. Inspect BUY/SELL/HOLD trades, turnover, and estimated costs.
 4. Change a risk slider and run optimization again.
 5. Set maximum single asset to 10% to demonstrate infeasibility.
-6. Restore 40%, rerun, and export the plan.
+6. Restore 40%, rerun, and export the PDF report.
 7. Explain the before/after trade-off and model assumptions.

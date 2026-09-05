@@ -2,7 +2,7 @@
 
 React + TypeScript hackathon frontend focused on Person 3's optimizer and rebalancing responsibilities.
 
-Includes a ₹100Cr demo portfolio, allocation editor, annual modeled metrics, risk limits and breaches, constrained allocation search, before/after bars, BUY/SELL/HOLD plan, per-asset fees, one-way turnover, CSV export, and decision explanations.
+Includes a ₹100Cr demo portfolio, allocation editor, annual modeled metrics, risk limits and breaches, constrained allocation search, before/after bars, BUY/SELL/HOLD plan, per-asset fees, one-way turnover, PDF export, and decision explanations.
 
 Read [PROMPTING-GUIDE.md](PROMPTING-GUIDE.md) for the step-by-step prompts and judge demo walkthrough.
 
