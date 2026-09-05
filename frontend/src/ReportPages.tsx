@@ -800,7 +800,7 @@ export function RecommendationsPage({ portfolio, risk, proposal, simulation, nav
               <Button variant="outline" onClick={() => navigate("simulation")}>Open Simulation <ArrowRight size={16} /></Button>
             </div>
           </section>
-          <section className="report-section"><SectionHeader index="03" title="Decision trail" note="Deterministic engine trace · no orders executed" /><div className="status-report">{proposal.decisionTrail.map((step, index) => <div key={`${step.stage}-${index}`}><span>{String(index + 1).padStart(2, "0")} · {step.stage.replaceAll("_", " ")}</span><p>{step.message}</p></div>)}</div></section>
+          <section className="report-section"><SectionHeader index="03" title="Decision trail" note="Engine decision log" /><div className="status-report">{proposal.decisionTrail.map((step, index) => <div key={`${step.stage}-${index}`}><span>{String(index + 1).padStart(2, "0")} · {step.stage.replaceAll("_", " ")}</span><p>{step.message}</p></div>)}</div></section>
         </>
       )}
     </div>

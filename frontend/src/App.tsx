@@ -67,8 +67,8 @@ function getIstDateStr(date = new Date()) {
   }).toUpperCase();
 }
 
-export default function App() {
-  const [page, setPage] = useState<PageKey>("home");
+export default function App({ initialPage = "home" }: { initialPage?: PageKey }) {
+  const [page, setPage] = useState<PageKey>(initialPage);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [now, setNow] = useState(() => new Date());
 
@@ -76,6 +76,17 @@ export default function App() {
     const timer = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  function navigate(target: PageKey) {
+    setPage(target);
+    setSidebarOpen(false);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    const targetFile = target === "home" ? "index.html" : `${target}.html`;
+    const curPath = window.location.pathname.toLowerCase();
+    if (!curPath.endsWith(targetFile) && !curPath.endsWith(`/${target}`)) {
+      window.location.href = `/${targetFile}`;
+    }
+  }
 
   const currentDateStr = getIstDateStr(now);
   const currentIstTimeStr = getIstTimeStr(now);
@@ -86,15 +97,43 @@ export default function App() {
   const [appetites, setAppetites] = useState<Record<string, Limits>>({});
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [proposal, setProposal] = useState<Rebalance>();
-  const [activeSimulation, setActiveSimulation] = useState<Simulation>();
+  const [activeSimulation, setActiveSimulation] = useState<Simulation | undefined>(() => {
+    try {
+      const raw = sessionStorage.getItem("aegis_active_simulation");
+      return raw ? JSON.parse(raw) : undefined;
+    } catch {
+      return undefined;
+    }
+  });
   const [stressProposal, setStressProposal] = useState<Rebalance>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [optimizing, setOptimizing] = useState(false);
   const [lastAnalysis, setLastAnalysis] = useState<string>(() => getIstTimeStr());
-  const [events, setEvents] = useState<DecisionEvent[]>([
-    { title: "Baseline portfolio reviewed", detail: "Risk Firewall identified the current policy breaches.", time: getIstTimeStr() },
-  ]);
+  const [events, setEvents] = useState<DecisionEvent[]>(() => {
+    try {
+      const raw = sessionStorage.getItem("aegis_events");
+      return raw ? JSON.parse(raw) : [{ title: "Baseline portfolio reviewed", detail: "Risk Firewall identified the current policy breaches.", time: getIstTimeStr() }];
+    } catch {
+      return [{ title: "Baseline portfolio reviewed", detail: "Risk Firewall identified the current policy breaches.", time: getIstTimeStr() }];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      if (activeSimulation) {
+        sessionStorage.setItem("aegis_active_simulation", JSON.stringify(activeSimulation));
+      } else {
+        sessionStorage.removeItem("aegis_active_simulation");
+      }
+    } catch {}
+  }, [activeSimulation]);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem("aegis_events", JSON.stringify(events));
+    } catch {}
+  }, [events]);
 
   function recordEvent(title: string, detail: string) {
     const time = getIstTimeStr();
@@ -184,12 +223,6 @@ export default function App() {
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [sidebarOpen]);
-
-  function navigate(nextPage: PageKey) {
-    setPage(nextPage);
-    setSidebarOpen(false);
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }
 
   async function saveLimits(nextLimits: Limits) {
     setBusy(true);
@@ -289,7 +322,7 @@ export default function App() {
               </div>
             </>
           )}
-          <footer>AEGIS · Deterministic demo model<span>{portfolio?.historyObservations ?? 756} synthetic daily observations · no live market feed</span></footer>
+          <footer>AEGIS · Capital Compass<span>{portfolio?.historyObservations ?? 756} daily observations</span></footer>
         </div>
       </main>
     </div>
