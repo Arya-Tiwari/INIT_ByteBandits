@@ -9,6 +9,10 @@ import {
   SlidersHorizontal,
   Info,
   RefreshCw,
+  Menu,
+  X,
+  PieChart,
+  ListChecks,
 } from "lucide-react";
 import { Button } from "./components/ui/button";
 import type { Risk, Portfolio, Scenario, Limits, Control } from "./types";
@@ -48,7 +52,13 @@ function Controls({ controls }: { controls: Control[] }) {
                 : pct(c.limit)}
             </small>
           </div>
-          <span className={`status ${c.status.toLowerCase()}`}>{c.status}</span>
+          <span className={`status ${c.status.toLowerCase()}`}>
+            {c.status === "BREACH"
+              ? "LIMIT BREACH"
+              : c.status === "WARNING"
+                ? "REVIEW REQUIRED"
+                : "WITHIN LIMIT"}
+          </span>
         </div>
       ))}
     </div>
@@ -72,7 +82,9 @@ function Card({
   );
 }
 export default function App() {
-  const [view, setView] = useState<"risk" | "stress">("stress"),
+  const [view, setView] = useState<"risk" | "stress">("risk"),
+    [activeNav, setActiveNav] = useState("overview"),
+    [sidebarOpen, setSidebarOpen] = useState(false),
     [portfolio, setPortfolio] = useState<Portfolio>(),
     [risk, setRisk] = useState<Risk>(),
     [limits, setLimits] = useState<Limits>(),
@@ -100,6 +112,31 @@ export default function App() {
   useEffect(() => {
     void load();
   }, []);
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSidebarOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [sidebarOpen]);
+  function navigate(
+    item: string,
+    nextView: "risk" | "stress",
+    target?: string,
+  ) {
+    setActiveNav(item);
+    setView(nextView);
+    setSidebarOpen(false);
+    if (target) {
+      window.setTimeout(
+        () => document.getElementById(target)?.scrollIntoView({ behavior: "smooth" }),
+        60,
+      );
+    } else {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }
   async function save() {
     setBusy(true);
     setError("");
@@ -119,48 +156,117 @@ export default function App() {
   const metrics = risk?.metrics;
   return (
     <div className="app">
-      <aside>
+      <button
+        className={`sidebar-toggle ${sidebarOpen ? "is-open" : ""}`}
+        aria-label="Open navigation"
+        aria-expanded={sidebarOpen}
+        aria-controls="primary-navigation"
+        onClick={() => setSidebarOpen(true)}
+      >
+        <Menu size={23} />
+      </button>
+      {sidebarOpen && (
+        <button
+          className="sidebar-scrim"
+          aria-label="Close navigation"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+      <aside
+        id="primary-navigation"
+        className={sidebarOpen ? "open" : ""}
+        aria-hidden={!sidebarOpen}
+      >
         <a className="brand" href="#">
           <ShieldCheck size={30} />
           <span>
             CapitalGuard<small>CAPITAL CONTROL ENGINE</small>
           </span>
         </a>
+        <button
+          className="sidebar-close"
+          aria-label="Close navigation"
+          onClick={() => setSidebarOpen(false)}
+        >
+          <X size={21} />
+        </button>
         <div className="nav-label">WORKSPACE</div>
         <nav>
           <button
-            className={view === "risk" ? "active" : ""}
-            onClick={() => setView("risk")}
+            className={activeNav === "overview" ? "active" : ""}
+            onClick={() => navigate("overview", "risk")}
           >
             <Activity size={19} />
-            Risk overview
+            Overview
           </button>
           <button
-            className={view === "stress" ? "active" : ""}
-            onClick={() => setView("stress")}
+            className={activeNav === "simulation" ? "active" : ""}
+            onClick={() => navigate("simulation", "stress", "stress-lab")}
           >
             <FlaskConical size={19} />
-            Stress Lab
+            Simulation
+          </button>
+          <button
+            className={activeNav === "exposure" ? "active" : ""}
+            onClick={() => navigate("exposure", "risk", "portfolio-exposure")}
+          >
+            <PieChart size={19} />
+            Exposure
+          </button>
+          <button
+            className={activeNav === "controls" ? "active" : ""}
+            onClick={() => navigate("controls", "risk", "risk-controls")}
+          >
+            <ShieldCheck size={19} />
+            Risk Controls
+          </button>
+          <button
+            className={activeNav === "optimisation" ? "active" : ""}
+            onClick={() => navigate("optimisation", "stress", "optimisation")}
+          >
+            <SlidersHorizontal size={19} />
+            Optimisation
+          </button>
+          <button
+            className={activeNav === "orders" ? "active" : ""}
+            onClick={() => navigate("orders", "stress", "recommended-trades")}
+          >
+            <ListChecks size={19} />
+            Orders
           </button>
         </nav>
         <div className="sidebar-foot">
           <span className="dot" />
-          Offline demo ready
+          ENGINE STATUS · ACTIVE
           <p>
-            Local portfolio · INR
-            <br />
-            No live market dependency
+            LAST RUN 17:04:21
           </p>
         </div>
       </aside>
       <main>
         <header>
-          <span>
-            Portfolio intelligence <span className="slash">/</span>{" "}
-            {view === "risk" ? "Risk overview" : "Stress Lab"}
-          </span>
-          <span className="demo">DEMO PORTFOLIO</span>
+          <div className="header-context">
+            <strong>Portfolio Risk Review</strong>
+            <span>PORTFOLIO / CG-001</span>
+          </div>
+          <div className="header-actions">
+            <span className="as-of">AS OF 05 SEP 2026 · 09:30 IST</span>
+            <span className="demo">DEMO / LOCAL</span>
+            <Button
+              className="run-analysis"
+              disabled={busy}
+              onClick={() => void load()}
+            >
+              <RefreshCw size={15} />
+              Run analysis
+            </Button>
+          </div>
         </header>
+        <div className="control-status">
+          <span><i className="status-led safe" /> MARKET DATA · LIVE</span>
+          <span><i className="status-led safe" /> CONTROL ENGINE · ACTIVE</span>
+          <span><i className="status-led breach" /> {risk?.controls.filter((c) => c.status === "BREACH").length ?? 0} BREACHES DETECTED</span>
+        </div>
         <div className="content">
           <div className="page-title">
             <div>
@@ -168,7 +274,9 @@ export default function App() {
                 CAPITAL PROTECTION / {view === "risk" ? "01" : "02"}
               </div>
               <h1>
-                {view === "risk" ? "Risk overview" : "Simulation / Risk Lab"}
+                {view === "risk"
+                  ? "Portfolio Risk Review"
+                  : "Scenario & Optimisation Review"}
               </h1>
               <p>
                 {view === "risk"
@@ -231,11 +339,11 @@ export default function App() {
                   note="Weighted score / 100"
                 />
               </div>
-              <div className="risk-layout">
-                <section className="panel">
+              <div className="risk-layout" id="risk-controls">
+                <section className="panel control-report">
                   <div className="section-head">
                     <div>
-                      <h2>Risk controls</h2>
+                      <h2>02 / Control breaches</h2>
                       <p>
                         {
                           risk.controls.filter((c) => c.status === "BREACH")
@@ -309,7 +417,7 @@ export default function App() {
                     {risk.explanations.map((e, i) => (
                       <p key={i}>{e}</p>
                     ))}
-                    <Button onClick={() => setView("stress")}>
+                    <Button onClick={() => navigate("simulation", "stress", "stress-lab")}>
                       Explore a stress test <ArrowUpRight size={16} />
                     </Button>
                   </section>
@@ -338,9 +446,9 @@ export default function App() {
                   </section>
                 </div>
               </div>
-              <section className="panel">
+              <section className="panel exposure-report" id="portfolio-exposure">
                 <div className="section-head">
-                  <h2>Portfolio composition</h2>
+                  <h2>01 / Portfolio exposure</h2>
                   <span className="muted">
                     Expected return {pct(metrics.expectedReturn)} · Historical
                     drawdown {pct(metrics.maxDrawdown)}
@@ -376,7 +484,9 @@ export default function App() {
               </section>
             </>
           ) : (
-            <RiskLab portfolio={portfolio} scenarios={scenarios} />
+            <div id="stress-lab">
+              <RiskLab portfolio={portfolio} scenarios={scenarios} />
+            </div>
           )}
 
           <footer>

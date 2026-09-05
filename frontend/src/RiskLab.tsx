@@ -614,7 +614,7 @@ export default function RiskLab({
                   }))}
                   margin={{ bottom: 42, right: 15 }}
                 >
-                  <CartesianGrid vertical={false} stroke="#e5e9e7" />
+                  <CartesianGrid vertical={false} stroke="#d7cdbf" />
                   <XAxis
                     dataKey="name"
                     interval={0}
@@ -625,10 +625,10 @@ export default function RiskLab({
                   <YAxis tick={{ fontSize: 12 }} />
                   <Tooltip formatter={(v) => `${Number(v).toFixed(2)} Cr`} />
                   <Legend verticalAlign="top" />
-                  <Bar dataKey="Current" fill="#b7c4c4" />
-                  <Bar dataKey="Stressed" fill="#213e43" />
+                  <Bar dataKey="Current" fill="#b9aa99" />
+                  <Bar dataKey="Stressed" fill="#4a342a" />
                   {proposal?.status === "FEASIBLE" && (
-                    <Bar dataKey="Rebalanced" fill="#2b956d" />
+                    <Bar dataKey="Rebalanced" fill="#b17a27" />
                   )}
                 </BarChart>
               </ResponsiveContainer>
@@ -638,10 +638,10 @@ export default function RiskLab({
             changes={result.firewallChanges}
             title="Risk Firewall · current → stressed"
           />
-          <section className="rebalance-station">
+          <section className="rebalance-station" id="optimisation">
             <div>
-              <span className="lab-kicker">03 / TEST A RESPONSE</span>
-              <h2>Can these breaches be repaired?</h2>
+              <span className="lab-kicker">03 / OPTIMISATION</span>
+              <h2>Generate a safer allocation</h2>
               <p>
                 Use the stressed holdings and their liquidity scores. Respect
                 the same policy limits, remaining capital and cumulative
@@ -665,9 +665,11 @@ export default function RiskLab({
           </section>
           {proposal && (
             <section
+              id="recommended-trades"
               className={`proposal ${proposal.status === "FEASIBLE" ? "feasible" : "infeasible"}`}
               role="status"
             >
+              <span className="lab-kicker">04 / RECOMMENDED TRADES</span>
               <div className="lab-section-title">
                 <h2>
                   {proposal.status === "FEASIBLE"
