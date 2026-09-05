@@ -1,12 +1,13 @@
 from pathlib import Path
 import json
 from threading import Lock
+from uuid import uuid4
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-from uuid import uuid4
 from collections import OrderedDict
-from .models import Asset, Portfolio, PortfolioAllocationRequest, RiskLimits, RiskReport, Scenario, ScenarioRequest, CustomRequest, WithdrawalRequest, SimulationResult, RebalanceResult, RouteCapitalRequest, RouteCapitalResponse, MarketSimulationRequest, MarketSimulationResult
+import numpy as np
+from .models import Asset, Portfolio, PortfolioAllocationRequest, RiskLimits, RiskReport, Scenario, ScenarioRequest, CustomRequest, WithdrawalRequest, SimulationResult, RebalanceResult, RouteCapitalRequest, RouteCapitalResponse, MarketSimulationRequest, MarketSimulationResult, AddAssetRequest
 from .risk_engine import evaluate
 from .simulation_engine import simulate
 from .scenarios import catalog
@@ -27,6 +28,14 @@ APPETITES = {
     'BALANCED': RiskLimits(maxPortfolioVolatility=0.16, maxVaR=0.018, maxCVaR=0.025, maxSingleAssetWeight=0.25, maxAssetClassWeight=0.55, minimumLiquidityScore=70, minimumCashWeight=0.05, maximumTurnover=0.20, riskAppetite='BALANCED'),
     'GROWTH': RiskLimits(maxPortfolioVolatility=0.22, maxVaR=0.030, maxCVaR=0.040, maxSingleAssetWeight=0.35, maxAssetClassWeight=0.65, minimumLiquidityScore=60, minimumCashWeight=0.03, maximumTurnover=0.30, riskAppetite='GROWTH'),
 }
+
+_risk_cache = {}
+_optimize_cache = {}
+
+def clear_cache():
+    with _lock:
+        _risk_cache.clear()
+        _optimize_cache.clear()
 
 def limits_snapshot():
     with _lock: return _limits.model_copy(deep=True)
@@ -80,7 +89,68 @@ def update_portfolio(request: PortfolioAllocationRequest):
             updates.update(assumption.model_dump(exclude_none=True))
         updated.append(asset.model_copy(update=updates))
     with _lock: _assets = [asset.model_copy(deep=True) for asset in updated]
+    clear_cache()
     return Portfolio(assets=updated,totalValue=total,historyObservations=len(RETURNS))
+
+@app.post('/api/portfolio/add-asset', response_model=Portfolio)
+def add_asset(request: AddAssetRequest):
+    global _assets, RETURNS
+    current = assets_snapshot()
+    new_id = f"asset-{len(current)+1}"
+    if any(a.ticker.upper() == request.ticker.upper() for a in current):
+        raise HTTPException(status_code=422, detail=f"Holding ticker '{request.ticker}' already exists.")
+    
+    val = request.currentValueCr * 1e7
+    new_total = sum(a.currentValue for a in current) + val
+    
+    r_annual = request.expectedReturnPercent / 100.0
+    v_annual = request.volatilityPercent / 100.0
+    
+    cls = request.assetClass
+    loading = {
+        'Equity': (0.82, 0.05, 0.0),
+        'International Equity': (0.65, 0.0, 0.0),
+        'REIT': (0.60, -0.35, 0.0),
+        'Corporate Bonds': (0.20, -0.65, 0.0),
+        'Government Bonds': (-0.15, -0.80, 0.0),
+        'Gold': (-0.15, 0.0, 0.80),
+        'Cash': (0.0, 0.0, 0.0),
+    }.get(cls, (0.50, 0.0, 0.0))
+    
+    rng = np.random.default_rng(len(current) * 1000 + 42)
+    market = rng.normal(0, 1, len(RETURNS))
+    rates = rng.normal(0, 1, len(RETURNS))
+    commodity = rng.normal(0, 1, len(RETURNS))
+    
+    for k in (130, 131, 400, 401, 610):
+        if k < len(RETURNS):
+            market[k] -= 3.5
+            
+    factor = (loading[0]*market + loading[1]*rates + loading[2]*commodity +
+              np.sqrt(max(0, 1.0 - sum(x*x for x in loading))) * rng.normal(0, 1, len(RETURNS)))
+    
+    daily_returns = (r_annual / 252.0) + (v_annual / np.sqrt(252.0)) * factor
+    
+    with _lock:
+        RETURNS[new_id] = daily_returns
+        new_asset = Asset(
+            id=new_id,
+            name=request.name,
+            ticker=request.ticker.upper(),
+            assetClass=request.assetClass,
+            currentValue=val,
+            currentWeight=val / new_total if new_total > 0 else 0,
+            expectedReturn=r_annual,
+            volatility=v_annual,
+            liquidityScore=request.liquidityScore,
+            duration=request.duration,
+        )
+        updated_assets = current + [new_asset]
+        for a in updated_assets:
+            a.currentWeight = a.currentValue / new_total if new_total > 0 else 0
+        _assets = [a.model_copy(deep=True) for a in updated_assets]
+    clear_cache()
+    return Portfolio(assets=_assets, totalValue=new_total, historyObservations=len(RETURNS))
 
 @app.post('/api/portfolio/route-capital', response_model=RouteCapitalResponse)
 def route_capital(request: RouteCapitalRequest):
@@ -121,6 +191,7 @@ def route_capital(request: RouteCapitalRequest):
         }))
     with _lock:
         _assets = [a.model_copy(deep=True) for a in updated]
+    clear_cache()
     liquidity_after = evaluate(updated, RETURNS, limits).metrics.liquidityScore
     return RouteCapitalResponse(routedToLiquidity=routed, remainingCapital=remaining,
         updatedAssets=updated, totalValue=new_total, liquidityBefore=liquidity_before,
@@ -135,6 +206,7 @@ def reset_demo():
         _assets = [asset.model_copy(deep=True) for asset in ASSETS]
         _limits = RiskLimits()
         _simulations.clear()
+    clear_cache()
     current = assets_snapshot()
     limits = limits_snapshot()
     return {
@@ -145,7 +217,14 @@ def reset_demo():
     }
 
 @app.get('/api/risk',response_model=RiskReport)
-def risk(): return evaluate(assets_snapshot(),RETURNS,limits_snapshot())
+def risk():
+    with _lock:
+        if 'report' in _risk_cache:
+            return _risk_cache['report'].model_copy(deep=True)
+    report = evaluate(assets_snapshot(),RETURNS,limits_snapshot())
+    with _lock:
+        _risk_cache['report'] = report
+    return report
 
 @app.get('/api/risk/limits',response_model=RiskLimits)
 def get_limits(): return limits_snapshot()
@@ -157,6 +236,7 @@ def get_appetites(): return APPETITES
 def update_limits(value: RiskLimits):
     global _limits
     with _lock: _limits = value.model_copy(deep=True)
+    clear_cache()
     return value
 
 @app.get('/api/simulations',response_model=list[Scenario])
@@ -166,9 +246,15 @@ def scenarios():
 @app.post('/api/optimize',response_model=RebalanceResult)
 def optimize_portfolio():
     """Return a funded proposal for the current portfolio; never execute it."""
+    with _lock:
+        if 'result' in _optimize_cache:
+            return _optimize_cache['result'].model_copy(deep=True)
     assets = assets_snapshot()
     total = sum(a.currentValue for a in assets)
-    return optimize(assets, RETURNS, limits_snapshot(), original_capital=total)
+    result = optimize(assets, RETURNS, limits_snapshot(), original_capital=total)
+    with _lock:
+        _optimize_cache['result'] = result
+    return result
 
 @app.post('/api/simulate',response_model=SimulationResult)
 def predefined(request: ScenarioRequest):

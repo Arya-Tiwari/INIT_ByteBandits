@@ -135,6 +135,31 @@ export default function App({ initialPage = "home" }: { initialPage?: PageKey })
     } catch {}
   }, [events]);
 
+  useEffect(() => {
+    const selector = ".scroll-reveal, .report-section, .portfolio-summary-card, .report-metric-row, .recommendation-summary, .page-header, .report-page-header, .controls-intro, .control-group, .optimization-strip, .intervention-summary, .optimizer-message, .financial-table, .comparison-chart, .decision-trail, .risk-score-hero, .overview-hero";
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("is-visible");
+          }
+        });
+      },
+      { threshold: 0.05, rootMargin: "0px 0px -30px 0px" }
+    );
+
+    const timer = setTimeout(() => {
+      const elements = document.querySelectorAll(selector);
+      elements.forEach((el) => observer.observe(el));
+    }, 50);
+
+    return () => {
+      clearTimeout(timer);
+      observer.disconnect();
+    };
+  }, [page, portfolio, risk, proposal, activeSimulation, events]);
+
   function recordEvent(title: string, detail: string) {
     const time = getIstTimeStr();
     setLastAnalysis(time);
@@ -202,11 +227,8 @@ export default function App({ initialPage = "home" }: { initialPage?: PageKey })
       setActiveSimulation(undefined);
       setStressProposal(undefined);
       setLastAnalysis(new Date().toLocaleTimeString("en-IN", { hour12: false }));
-      try {
-        setProposal(await api<Rebalance>("/optimize", {}));
-      } catch {
-        setProposal(undefined);
-      }
+      // Non-blocking fetch of optimization proposal so initial page load renders instantly
+      api<Rebalance>("/optimize", {}).then(setProposal).catch(() => setProposal(undefined));
     } catch (cause) {
       setError((cause as Error).message);
     } finally {

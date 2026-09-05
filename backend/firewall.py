@@ -22,6 +22,18 @@ def policy_margins(metrics, limits):
             for key, field, _, minimum in POLICIES]
 
 
+REMEDIATIONS = {
+    'maxPortfolioVolatility': 'Reallocate capital from high-volatility equities to government bonds or treasury cash to reduce portfolio variance.',
+    'maxVaR': 'Trim overweight equity holdings (especially mid-cap positions) and increase defensive cash/bond reserves.',
+    'maxCVaR': 'Run 1-click Portfolio Optimization to trim tail-risk concentrations, or switch to Growth risk appetite.',
+    'maxSingleAssetWeight': 'Trim single asset weight below policy limit and distribute proceeds into under-weighted holdings.',
+    'maxAssetClassWeight': 'Reduce overall asset class concentration by rebalancing into complementary asset classes.',
+    'minimumLiquidityScore': 'Liquidate illiquid holdings (<70 liquidity score) or route incoming capital into Treasury Cash to satisfy liquidity floor.',
+    'minimumCashWeight': 'Sell liquid holdings or execute a capital route to restore cash reserve floor.',
+    'maximumTurnover': 'Hold positions steady or increase maximum turnover budget in Risk Firewall limits to allow larger rebalance trades.',
+}
+
+
 def check(metrics, limits):
     controls = []
     for key, field, label, minimum in POLICIES:
@@ -36,8 +48,16 @@ def check(metrics, limits):
         relationship = ('below' if minimum else 'above') if breach else 'within'
         explanation = f'{label} is {fmt(current)}, {relationship} the configured {"minimum" if minimum else "maximum"} of {fmt(limit)}.'
         if status == 'WARNING': explanation += ' This is within 10% of the limit.'
+        remediation = None
+        if breach or warning:
+            if field == 'largestAssetExposure':
+                remediation = f'Trim {metrics.largestAssetName} weight below {limit:.1%} and reallocate to under-weighted holdings.'
+            elif field == 'largestAssetClassExposure':
+                remediation = f'Reduce overall {metrics.largestAssetClass} exposure below {limit:.1%} by rebalancing into complementary asset classes.'
+            else:
+                remediation = REMEDIATIONS.get(key, 'Run optimization to rebalance portfolio and satisfy policy boundary.')
         controls.append(Control(controlName=key, currentValue=current, limit=limit, status=status,
-            severity='HIGH' if breach else 'MEDIUM' if warning else 'NONE', explanation=explanation))
+            severity='HIGH' if breach else 'MEDIUM' if warning else 'NONE', explanation=explanation, remediation=remediation))
     return controls
 
 

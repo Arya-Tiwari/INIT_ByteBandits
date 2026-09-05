@@ -865,14 +865,24 @@ footer {
   text-transform: uppercase;
   margin-bottom: 6px;
 }
+.home-title-logo-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 20px;
+  margin: 6px 0;
+}
+.home-title-logo-row .aegis-mark {
+  flex-shrink: 0;
+  filter: drop-shadow(0 2px 8px rgba(74, 52, 42, 0.14));
+}
 .home-aegis-title {
   margin: 0;
   color: var(--brown);
   font-family: var(--mono);
-  font-size: clamp(32px, 3.5vw, 42px);
-  font-weight: 700;
-  line-height: 1.1;
-  letter-spacing: -0.025em;
+  font-size: clamp(56px, 7vw, 84px);
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.01em;
 }
 .home-subtitle {
   margin: 10px 0 0;
@@ -1035,13 +1045,65 @@ footer {
 .status-report { border-top: 1px solid var(--rule); }
 .status-report > div {
   display: flex;
-  min-height: 67px;
+  min-height: 56px;
   align-items: center;
   justify-content: space-between;
   gap: 25px;
+  padding: 10px 0;
   border-bottom: 1px solid var(--rule);
 }
 .status-report > div > span:first-child { font-size: 16px; }
+.control-label-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.control-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--brown);
+}
+.control-remediation-hint {
+  font-size: 11.5px;
+  color: var(--ochre);
+  font-weight: 500;
+  line-height: 1.3;
+}
+.control-table-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.control-table-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--brown);
+}
+.control-table-explanation {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+.control-remediation-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 4px;
+  padding: 4px 8px;
+  background: var(--paper-deep);
+  border-left: 2px solid var(--ochre);
+  border-radius: 2px;
+  font-size: 11.5px;
+  color: var(--brown);
+  font-weight: 500;
+}
+.control-remediation-box .remediation-tag {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--ochre);
+  letter-spacing: 0.05em;
+}
 .report-status {
   display: inline-flex;
   min-height: 26px;
@@ -1358,3 +1420,120 @@ footer {
   .sticky-form-actions { grid-template-columns: 1fr 1fr; }
   .sticky-form-actions > div { grid-column: 1 / -1; }
 }
+
+/* Scroll Reveal & Lift Up Animations */
+.scroll-reveal,
+.report-section,
+.portfolio-summary-card,
+.report-metric-row,
+.recommendation-summary,
+.page-header,
+.report-page-header,
+.controls-intro,
+.control-group,
+.optimization-strip,
+.intervention-summary,
+.optimizer-message,
+.financial-table,
+.comparison-chart,
+.decision-trail,
+.risk-score-hero,
+.overview-hero {
+  opacity: 0;
+  transform: translateY(28px);
+  transition: opacity 0.65s cubic-bezier(0.16, 1, 0.3, 1), transform 0.65s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: opacity, transform;
+}
+
+.scroll-reveal.is-visible,
+.report-section.is-visible,
+.portfolio-summary-card.is-visible,
+.report-metric-row.is-visible,
+.recommendation-summary.is-visible,
+.page-header.is-visible,
+.report-page-header.is-visible,
+.controls-intro.is-visible,
+.control-group.is-visible,
+.optimization-strip.is-visible,
+.intervention-summary.is-visible,
+.optimizer-message.is-visible,
+.financial-table.is-visible,
+.comparison-chart.is-visible,
+.decision-trail.is-visible,
+.risk-score-hero.is-visible,
+.overview-hero.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.reveal-delay-1 { transition-delay: 0.08s; }
+.reveal-delay-2 { transition-delay: 0.16s; }
+.reveal-delay-3 { transition-delay: 0.24s; }
+
+/* Micro-interaction lift on section titles & cards on scroll / hover */
+.report-section-head h2, .report-page-header h1 {
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), color 0.25s ease;
+}
+.report-section-head:hover h2 {
+  transform: translateX(4px);
+  color: var(--brown);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scroll-reveal,
+  .report-section,
+  .portfolio-summary-card,
+  .report-metric-row,
+  .recommendation-summary,
+  .page-header,
+  .report-page-header,
+  .controls-intro,
+  .control-group,
+  .optimization-strip,
+  .intervention-summary,
+  .optimizer-message,
+  .financial-table,
+  .comparison-chart,
+  .decision-trail,
+  .risk-score-hero,
+  .overview-hero {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}
+
+/* Search Box Alignment */
+.search-box {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.search-box svg {
+  position: absolute;
+  left: 10px;
+  color: var(--muted);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.search-box input {
+  padding: 6px 12px 6px 32px;
+  font-size: 13px;
+  font-family: var(--mono);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: white;
+  color: var(--ink);
+  width: 190px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.search-box input:focus {
+  outline: none;
+  border-color: var(--brown);
+  box-shadow: 0 0 0 2px rgba(74, 52, 42, 0.15);
+}
+
+

@@ -33,6 +33,7 @@ export type Control = {
   status: "PASS" | "WARNING" | "BREACH";
   severity: string;
   explanation: string;
+  remediation?: string;
 };
 export type Metrics = {
   expectedReturn: number;

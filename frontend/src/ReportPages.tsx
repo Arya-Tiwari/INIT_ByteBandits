@@ -7,10 +7,12 @@ import {
   ChevronUp,
   CircleAlert,
   Download,
+  FileSpreadsheet,
   Search,
   ShieldAlert,
   ShieldCheck,
   SlidersHorizontal,
+  Upload,
 } from "lucide-react";
 import {
   Bar,
@@ -173,6 +175,10 @@ function AllocationFigure({ portfolio }: { portfolio: Portfolio }) {
   );
 }
 
+function AegisMark({ size = 30 }: { size?: number }) {
+  return <svg className="aegis-mark" width={size} height={size} viewBox="0 0 40 40" aria-hidden="true"><path d="M7 31 18.2 7h3.6L33 31h-6.1l-2.2-5.4h-9.8L12.7 31H7Z" /><path d="M17.1 20.2h5.8L20 12.8l-2.9 7.4Z" /><path d="M12.8 33.5h14.4" /></svg>;
+}
+
 export function OverviewPage({ portfolio, risk, proposal, events, navigate }: { portfolio: Portfolio; risk: Risk; proposal?: Rebalance; events: DecisionEvent[]; navigate: (page: PageKey) => void }) {
   const breaches = risk.controls.filter((control) => control.status === "BREACH").length;
   const optimizedRisk = proposal?.risk?.riskScore;
@@ -185,7 +191,10 @@ export function OverviewPage({ portfolio, risk, proposal, events, navigate }: { 
       <div className="overview-hero">
         <div className="home-brand-hero">
           <span className="home-eyebrow">THE CAPITAL COMPASS</span>
-          <h1 className="home-aegis-title">AEGIS</h1>
+          <div className="home-title-logo-row">
+            <AegisMark size={68} />
+            <h1 className="home-aegis-title">AEGIS</h1>
+          </div>
           <p className="home-subtitle">Asset &amp; Capital Optimization Control Engine</p>
         </div>
         <div className="hero-capital">
@@ -205,8 +214,19 @@ export function OverviewPage({ portfolio, risk, proposal, events, navigate }: { 
           <SectionHeader index="01" title="Portfolio control status" note={`${breaches} limits currently breached`} />
           <div className="status-report">
             <div><span>Current status</span><StatusIndicator status={overall === "STABLE" ? "safe" : overall === "WARNING" ? "warning" : "breach"}>{overall}</StatusIndicator></div>
-            <div><span>Operating mode</span><StatusIndicator status={mode === "NORMAL" ? "safe" : mode === "CAUTION" ? "warning" : "breach"}>{mode}</StatusIndicator></div>
-            {risk.controls.slice(0, 4).map((control) => <div key={control.controlName}><span>{controlNames[control.controlName]}</span><StatusIndicator status={control.status === "PASS" ? "safe" : control.status === "WARNING" ? "warning" : "breach"}>{control.status}</StatusIndicator></div>)}
+            {risk.controls.map((control) => (
+              <div key={control.controlName} className="status-report-row">
+                <div className="control-label-wrap">
+                  <span className="control-name">{controlNames[control.controlName]}</span>
+                  {control.remediation && control.status !== "PASS" && (
+                    <span className="control-remediation-hint">
+                      Fix: {control.remediation}
+                    </span>
+                  )}
+                </div>
+                <StatusIndicator status={control.status === "PASS" ? "safe" : control.status === "WARNING" ? "warning" : "breach"}>{control.status}</StatusIndicator>
+              </div>
+            ))}
           </div>
         </section>
         <section className="report-section recommendation-callout">
@@ -243,7 +263,16 @@ export function PortfolioPage({
   const [assumptions, setAssumptions] = useState<Record<string, AssetAssumptionUpdate>>({});
   const [totalCapCr, setTotalCapCr] = useState<number>(portfolio.totalValue / 1e7);
   const [incomingCapCr, setIncomingCapCr] = useState<number>(1.0);
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(true);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [newAssetName, setNewAssetName] = useState("");
+  const [newAssetTicker, setNewAssetTicker] = useState("");
+  const [newAssetClass, setNewAssetClass] = useState("Equity");
+  const [newAssetValCr, setNewAssetValCr] = useState(2.0);
+  const [newAssetReturnPct, setNewAssetReturnPct] = useState(12.0);
+  const [newAssetVolPct, setNewAssetVolPct] = useState(22.0);
+  const [newAssetLiq, setNewAssetLiq] = useState(75);
+  const [newAssetDur, setNewAssetDur] = useState(0);
   const [routeResult, setRouteResult] = useState<{
     incomingCapital: number;
     routedToLiquidity: number;
@@ -257,6 +286,127 @@ export function PortfolioPage({
   const [search, setSearch] = useState("");
   const [validation, setValidation] = useState("");
   const [saved, setSaved] = useState(false);
+
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importText, setImportText] = useState("");
+  const [importError, setImportError] = useState("");
+  const [importing, setImporting] = useState(false);
+
+  function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result as string;
+      if (text) setImportText(text);
+    };
+    reader.readAsText(file);
+  }
+
+  function handleDownloadTemplate() {
+    const templateContent =
+      "Name,Ticker,AssetClass,ValueCr,ExpectedReturnPercent,VolatilityPercent,LiquidityScore\n" +
+      "Small Cap ETF,SMALL,Equity,1.5,14.5,22.0,85\n" +
+      "Global Tech Fund,GTECH,International Equity,2.0,16.0,24.0,90\n" +
+      "Green Energy REIT,GREIT,REIT,1.0,11.0,18.0,70\n";
+    const blob = new Blob([templateContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", "aegis_holdings_import_template.csv");
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+
+  async function handleBatchImport() {
+    if (!importText.trim()) {
+      setImportError("Please select a CSV/JSON file or paste dataset content.");
+      return;
+    }
+    setImportError("");
+    setImporting(true);
+    try {
+      let parsed: any[] = [];
+      const trimmed = importText.trim();
+      if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+        const jsonRes = JSON.parse(trimmed);
+        parsed = Array.isArray(jsonRes) ? jsonRes : [jsonRes];
+      } else {
+        const lines = trimmed.split(/\r?\n/).filter((line) => line.trim().length > 0);
+        if (lines.length <= 1) {
+          throw new Error("CSV data must contain a header row and at least one asset row.");
+        }
+        for (let i = 1; i < lines.length; i++) {
+          const cols = lines[i].split(",").map((s) => s.trim());
+          if (cols.length < 4) continue;
+          parsed.push({
+            name: cols[0],
+            ticker: cols[1],
+            assetClass: cols[2] || "Equity",
+            currentValueCr: Number(cols[3]) || 1.0,
+            expectedReturnPercent: cols[4] != null ? Number(cols[4]) : 12.0,
+            volatilityPercent: cols[5] != null ? Number(cols[5]) : 18.0,
+            liquidityScore: cols[6] != null ? Number(cols[6]) : 80,
+          });
+        }
+      }
+
+      if (parsed.length === 0) {
+        throw new Error("No valid asset records found in import content.");
+      }
+
+      for (const item of parsed) {
+        await api<Portfolio>("/portfolio/add-asset", {
+          name: item.name || "Imported Holding",
+          ticker: item.ticker || `IMP-${Math.floor(Math.random() * 1000)}`,
+          assetClass: item.assetClass || "Equity",
+          currentValueCr: Number(item.currentValueCr || item.valueCr || 1.0),
+          expectedReturnPercent: Number(item.expectedReturnPercent ?? item.expectedReturn ?? 12.0),
+          volatilityPercent: Number(item.volatilityPercent ?? item.volatility ?? 18.0),
+          liquidityScore: Number(item.liquidityScore ?? 80),
+        });
+      }
+
+      if (onReload) await onReload();
+      if (onRecordEvent) {
+        onRecordEvent("Bulk holdings imported", `Successfully imported ${parsed.length} asset holdings into catalog.`);
+      }
+      setImportText("");
+      setShowImportModal(false);
+    } catch (err) {
+      setImportError((err as Error).message);
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  async function handleAddAsset() {
+    if (!newAssetName.trim() || !newAssetTicker.trim()) {
+      setValidation("Please enter asset name and ticker symbol.");
+      return;
+    }
+    setValidation("");
+    try {
+      await api<Portfolio>("/portfolio/add-asset", {
+        name: newAssetName.trim(),
+        ticker: newAssetTicker.trim(),
+        assetClass: newAssetClass,
+        currentValueCr: newAssetValCr,
+        expectedReturnPercent: newAssetReturnPct,
+        volatilityPercent: newAssetVolPct,
+        liquidityScore: newAssetLiq,
+        duration: newAssetDur,
+      });
+      setShowAddModal(false);
+      setNewAssetName("");
+      setNewAssetTicker("");
+      onRecordEvent?.("Holding added", `Added ${newAssetName} (${newAssetTicker}) to portfolio holdings.`);
+      await onReload?.();
+    } catch (cause) {
+      setValidation((cause as Error).message);
+    }
+  }
 
   useEffect(() => {
     const init: Record<string, number> = {};
@@ -480,7 +630,13 @@ export function PortfolioPage({
       {/* Main Holdings Header */}
       <div className="report-section-head">
         <div><span>01</span><h2>Holdings ({portfolio.assets.length})</h2></div>
-        <div style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
+        <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
+          <Button type="button" onClick={() => { setShowAddModal(!showAddModal); setShowImportModal(false); }} style={{ fontSize: "13px", padding: "4px 12px" }}>
+            {showAddModal ? "Cancel" : "+ Add Holding"}
+          </Button>
+          <Button variant="outline" type="button" onClick={() => { setShowImportModal(!showImportModal); setShowAddModal(false); }} style={{ fontSize: "13px", padding: "4px 12px", display: "inline-flex", alignItems: "center", gap: "5px" }}>
+            <Upload size={14} /> Import Holdings
+          </Button>
           <Button variant="outline" type="button" onClick={() => setShowAdvanced(!showAdvanced)} style={{ fontSize: "13px", padding: "4px 12px" }}>
             {showAdvanced ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
             {showAdvanced ? "Hide advanced assumptions" : "Advanced assumptions"}
@@ -488,6 +644,85 @@ export function PortfolioPage({
           <div className="search-box"><Search size={15} /><input type="text" placeholder="Search holdings…" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
         </div>
       </div>
+
+      {showImportModal && (
+        <div className="report-section" style={{ background: "var(--paper-deep)", padding: "1.25rem", borderRadius: "4px", border: "1px solid var(--rule)", marginBottom: "1.25rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+            <h3 style={{ margin: 0, fontSize: "14px", fontFamily: "var(--mono)", color: "var(--brown)" }}>Import Portfolio Holdings (CSV / JSON)</h3>
+            <Button variant="outline" type="button" onClick={handleDownloadTemplate} style={{ fontSize: "12px", padding: "3px 10px", display: "inline-flex", alignItems: "center", gap: "5px" }}>
+              <Download size={13} /> Sample CSV Template
+            </Button>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+            <label style={{ fontSize: "12px", fontFamily: "var(--mono)", color: "var(--muted)", display: "flex", flexDirection: "column", gap: "4px" }}>
+              Upload CSV or JSON file:
+              <input type="file" accept=".csv,.json" onChange={handleFileUpload} style={{ padding: "6px", background: "white", borderRadius: "3px", border: "1px solid var(--rule)" }} />
+            </label>
+            <label style={{ fontSize: "12px", fontFamily: "var(--mono)", color: "var(--muted)", display: "flex", flexDirection: "column", gap: "4px" }}>
+              Or paste raw CSV / JSON text content:
+              <textarea
+                rows={4}
+                placeholder="Name,Ticker,AssetClass,ValueCr,ExpectedReturnPercent,VolatilityPercent,LiquidityScore..."
+                value={importText}
+                onChange={(e) => setImportText(e.target.value)}
+                style={{ width: "100%", padding: "8px", borderRadius: "3px", border: "1px solid var(--rule)", fontFamily: "var(--mono)", fontSize: "12px" }}
+              />
+            </label>
+            {importError && <span style={{ color: "var(--rust)", fontSize: "12.5px", fontFamily: "var(--mono)" }}>{importError}</span>}
+            <div style={{ display: "flex", gap: "10px", marginTop: "4px" }}>
+              <Button disabled={importing || !importText.trim()} onClick={() => void handleBatchImport()} style={{ padding: "6px 16px" }}>
+                {importing ? "Importing…" : "Confirm & Import Holdings"}
+              </Button>
+              <Button variant="outline" type="button" onClick={() => { setShowImportModal(false); setImportError(""); }}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showAddModal && (
+        <div className="report-section" style={{ background: "var(--paper-deep)", padding: "1.25rem", borderRadius: "4px", border: "1px solid var(--rule)", marginBottom: "1.25rem" }}>
+          <h3 style={{ margin: "0 0 12px", fontSize: "14px", fontFamily: "var(--mono)", color: "var(--brown)" }}>Add New Holding to Asset Catalog</h3>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: "12px", alignItems: "end" }}>
+            <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "11.5px", fontFamily: "var(--mono)", color: "var(--muted)" }}>
+              Asset Name
+              <input type="text" placeholder="e.g. Small Cap Fund" value={newAssetName} onChange={(e) => setNewAssetName(e.target.value)} style={{ padding: "5px 8px", borderRadius: "3px", border: "1px solid var(--rule)" }} />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "11.5px", fontFamily: "var(--mono)", color: "var(--muted)" }}>
+              Ticker Symbol
+              <input type="text" placeholder="e.g. SMALLCAP" value={newAssetTicker} onChange={(e) => setNewAssetTicker(e.target.value)} style={{ padding: "5px 8px", borderRadius: "3px", border: "1px solid var(--rule)" }} />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "11.5px", fontFamily: "var(--mono)", color: "var(--muted)" }}>
+              Asset Class
+              <select value={newAssetClass} onChange={(e) => setNewAssetClass(e.target.value)} style={{ padding: "5px 8px", borderRadius: "3px", border: "1px solid var(--rule)", background: "#fff" }}>
+                {["Equity", "International Equity", "Government Bonds", "Corporate Bonds", "REIT", "Gold", "Commodities", "Private Credit", "Infrastructure", "Alternative Assets"].map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "11.5px", fontFamily: "var(--mono)", color: "var(--muted)" }}>
+              Value (₹ Cr)
+              <input type="number" step="0.5" min="0.1" value={newAssetValCr} onChange={(e) => setNewAssetValCr(Number(e.target.value))} style={{ padding: "5px 8px", borderRadius: "3px", border: "1px solid var(--rule)" }} />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "11.5px", fontFamily: "var(--mono)", color: "var(--muted)" }}>
+              Exp Return (%)
+              <input type="number" step="0.5" value={newAssetReturnPct} onChange={(e) => setNewAssetReturnPct(Number(e.target.value))} style={{ padding: "5px 8px", borderRadius: "3px", border: "1px solid var(--rule)" }} />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "11.5px", fontFamily: "var(--mono)", color: "var(--muted)" }}>
+              Volatility (%)
+              <input type="number" step="0.5" min="0" value={newAssetVolPct} onChange={(e) => setNewAssetVolPct(Number(e.target.value))} style={{ padding: "5px 8px", borderRadius: "3px", border: "1px solid var(--rule)" }} />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "11.5px", fontFamily: "var(--mono)", color: "var(--muted)" }}>
+              Liquidity (0-100)
+              <input type="number" min="0" max="100" value={newAssetLiq} onChange={(e) => setNewAssetLiq(Number(e.target.value))} style={{ padding: "5px 8px", borderRadius: "3px", border: "1px solid var(--rule)" }} />
+            </label>
+            <Button disabled={busy} onClick={() => void handleAddAsset()} style={{ padding: "6px 14px" }}>
+              {busy ? "Adding…" : "Save New Asset"}
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Main Table */}
       <div className="table-wrap">
@@ -662,10 +897,21 @@ export function RiskPage({
             <tbody>
               {risk.controls.map((control) => (
                 <tr key={control.controlName}>
-                  <td><strong>{controlNames[control.controlName]}</strong><small>{control.explanation}</small></td>
+                  <td>
+                    <div className="control-table-cell">
+                      <strong className="control-table-name">{controlNames[control.controlName]}</strong>
+                      <span className="control-table-explanation">{control.explanation}</span>
+                      {control.remediation && control.status !== "PASS" && (
+                        <div className="control-remediation-box">
+                          <span className="remediation-tag">FIX</span>
+                          <span>{control.remediation}</span>
+                        </div>
+                      )}
+                    </div>
+                  </td>
                   <td>{control.controlName === "minimumLiquidityScore" ? control.currentValue.toFixed(1) : pct(control.currentValue)}</td>
                   <td>{control.controlName.startsWith("minimum") ? "≥ " : "≤ "}{control.controlName === "minimumLiquidityScore" ? control.limit.toFixed(1) : pct(control.limit)}</td>
-                  <td>{control.controlName === "minimumLiquidityScore" ? `${Math.abs(control.currentValue-control.limit).toFixed(1)} ${control.currentValue < control.limit ? "shortfall" : "buffer"}` : `${pct(Math.abs(control.currentValue-control.limit))} ${control.currentValue < control.limit === control.controlName.startsWith("minimum") ? "breach" : "buffer"}`}</td>
+                  <td>{control.controlName === "minimumLiquidityScore" ? `${Math.abs(control.currentValue - control.limit).toFixed(1)} ${control.currentValue < control.limit ? "shortfall" : "buffer"}` : `${pct(Math.abs(control.currentValue - control.limit))} ${control.currentValue < control.limit === control.controlName.startsWith("minimum") ? "breach" : "buffer"}`}</td>
                   <td><StatusIndicator status={control.status === "BREACH" ? "breach" : control.status === "WARNING" ? "warning" : "safe"}>{control.status === "PASS" ? "SAFE" : control.status === "BREACH" ? "BREACHED" : "WARNING"}</StatusIndicator></td>
                 </tr>
               ))}
@@ -674,7 +920,7 @@ export function RiskPage({
         </div>
       </section>
       <div className="report-two-column risk-detail-grid">
-        <section className="report-section"><SectionHeader index="02" title="Portfolio health score" note={`${risk.portfolioScore.toFixed(1)} / 100`} /><div className="risk-bars">{Object.entries(risk.scoreComponents).map(([name, points]) => <div key={name}><span>{name}</span><div><i style={{ width: `${Math.min(100, points / ({"Risk compliance":30,"Diversification":20,"Liquidity":15,"Volatility / risk":20,"Historical resilience":15}[name] ?? 20) * 100)}%` }} /></div><b>{points.toFixed(1)} pts</b></div>)}</div></section>
+        <section className="report-section"><SectionHeader index="02" title="Portfolio health score" note={`${risk.portfolioScore.toFixed(1)} / 100`} /><div className="risk-bars">{Object.entries(risk.scoreComponents).map(([name, points]) => <div key={name}><span>{name}</span><div><i style={{ width: `${Math.min(100, points / ({ "Risk compliance": 30, "Diversification": 20, "Liquidity": 15, "Volatility / risk": 20, "Historical resilience": 15 }[name] ?? 20) * 100)}%` }} /></div><b>{points.toFixed(1)} pts</b></div>)}</div></section>
         <section className="report-section explanation-report"><SectionHeader index="03" title="Why the risk is high" />{risk.explanations.map((explanation, index) => <p key={index}><span>{String(index + 1).padStart(2, "0")}</span>{explanation}</p>)}</section>
       </div>
       <ControlsPage limits={limits} appetites={appetites} busy={busy} save={save} embedded />
@@ -721,7 +967,65 @@ export function OptimizationPage({ portfolio, risk, proposal, simulation, busy, 
         </section>
       )}
       {proposal && proposal.status !== "FEASIBLE" && <div className="optimizer-message"><CircleAlert size={19} /><div><strong>{proposal.status === "INFEASIBLE" ? "No feasible allocation" : "No verified solution"}</strong><p>{proposal.explanation}</p>{proposal.conflicts.map((conflict) => <small key={conflict}>{conflict}</small>)}</div></div>}
-      {proposal?.status === "FEASIBLE" && proposal.changeSummary.length > 0 && <section className="report-section"><SectionHeader index="01" title="What changed" note={`${proposal.trades.filter(t => t.action !== "HOLD").length} holding actions · ${pct(proposal.cumulativeTurnover)} cumulative turnover`} /><div className="constraint-list">{proposal.changeSummary.map(item => <span key={item}><ArrowRight size={14} />{item}</span>)}</div></section>}
+      {proposal?.status === "FEASIBLE" && (proposal.changeSummary.length > 0 || proposal.trades.some(t => t.action !== "HOLD")) && (
+        <section className="report-section">
+          <SectionHeader
+            index="01"
+            title="What changed"
+            note={`${proposal.trades.filter(t => t.action !== "HOLD").length} holding actions · ${pct(proposal.cumulativeTurnover)} cumulative turnover`}
+          />
+          {proposal.changeSummary.length > 0 && (
+            <div style={{ marginBottom: "1rem" }}>
+              <span style={{ fontSize: "11px", fontFamily: "var(--mono)", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em", display: "block", marginBottom: "6px" }}>
+                Asset Class Shift Summary
+              </span>
+              <div className="constraint-list">
+                {proposal.changeSummary.map(item => <span key={item}><ArrowRight size={14} />{item}</span>)}
+              </div>
+            </div>
+          )}
+          <div style={{ display: "grid", gap: "10px", marginTop: "12px" }}>
+            <span style={{ fontSize: "11px", fontFamily: "var(--mono)", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em", display: "block" }}>
+              Holding Actions & Rationale
+            </span>
+            {proposal.trades.filter(t => t.action !== "HOLD").map(t => (
+              <div
+                key={t.assetId}
+                style={{
+                  background: "var(--paper-deep)",
+                  border: "1px solid var(--rule)",
+                  borderRadius: "4px",
+                  padding: "12px 16px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "6px"
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "8px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                    <span className={`trade-action ${t.action.toLowerCase()}`}>{t.action}</span>
+                    <strong style={{ fontSize: "14px", color: "var(--brown)" }}>{t.name}</strong>
+                    <span style={{ fontSize: "12px", color: "var(--muted)", fontFamily: "var(--mono)" }}>
+                      {pct(t.stressedWeight)} → {pct(t.targetWeight)} ({t.action === "SELL" ? "−" : "+"}{pct(Math.abs(t.targetWeight - t.stressedWeight))})
+                    </span>
+                  </div>
+                  <span style={{ fontSize: "11px", fontWeight: "600", fontFamily: "var(--mono)", background: "var(--paper)", padding: "3px 8px", borderRadius: "3px", border: "1px solid var(--rule)", color: "var(--ink)" }}>
+                    {t.triggeredConstraint}
+                  </span>
+                </div>
+                <p style={{ margin: 0, fontSize: "13px", color: "var(--ink)", lineHeight: "1.4" }}>
+                  <strong>Reason:</strong> {t.reason}
+                </p>
+              </div>
+            ))}
+            {proposal.trades.filter(t => t.action !== "HOLD").length === 0 && (
+              <p style={{ fontSize: "13px", color: "var(--muted)", fontStyle: "italic" }}>
+                No active trades required. Current allocation satisfies all configured risk firewall limits.
+              </p>
+            )}
+          </div>
+        </section>
+      )}
       <section className="report-section"><SectionHeader index="02" title="Allocation shift" note="Current → target" /><div className="table-wrap"><table className="financial-table"><thead><tr><th>Asset class</th><th>Current</th><th>Target</th><th>Difference</th><th>Action</th></tr></thead><tbody>{comparison.map((row) => { const diff = (row.Target - row.Current) / 100; const action = Math.abs(diff) < .0001 ? "HOLD" : diff > 0 ? "BUY" : "SELL"; return <tr key={row.name}><td><strong>{row.name}</strong></td><td>{row.Current.toFixed(2)}%</td><td>{row.Target.toFixed(2)}%</td><td className={diff < 0 ? "negative" : diff > 0 ? "positive" : ""}>{diff === 0 ? "—" : `${diff > 0 ? "+" : ""}${pct(diff)}`}</td><td><span className={`trade-action ${action.toLowerCase()}`}>{action}</span></td></tr>; })}</tbody></table></div></section>
       <section className="report-section"><SectionHeader index="02" title="Current → target" note="Allocation percentage by broad asset group" /><div className="comparison-chart"><ResponsiveContainer width="100%" height="100%"><BarChart data={comparison} layout="vertical" margin={{ left: 18, right: 24 }}><CartesianGrid horizontal={false} stroke="#d7cdbf" /><XAxis type="number" unit="%" tick={{ fontSize: 11 }} /><YAxis type="category" dataKey="name" width={120} tick={{ fontSize: 12 }} /><Tooltip formatter={(value) => `${Number(value).toFixed(2)}%`} /><Bar dataKey="Current" fill="#b9aa99" /><Bar dataKey="Target" fill="#4a342a" /></BarChart></ResponsiveContainer></div></section>
       <section className="report-section objective-report"><SectionHeader index="03" title="Optimization objective" /><p>{proposal?.objective ?? "Run the optimizer to generate a verified allocation."}</p><div className="constraint-list">{["Risk Firewall limits", `Minimum liquidity ${limitsValue(proposal?.limits.minimumLiquidityScore, false)}`, `Maximum turnover ${limitsValue(proposal?.limits.maximumTurnover, true)}`, "Capital conserved · no external funding"].map((item) => <span key={item}><Check size={14} />{item}</span>)}</div><div className="report-actions"><Button disabled={busy} onClick={run}><SlidersHorizontal size={16} />{busy ? "Running optimizer…" : "Run optimization"}</Button><Button variant="outline" onClick={() => navigate("rebalance")}>View rebalance plan</Button></div></section>
@@ -870,7 +1174,7 @@ export function ControlsPage({
   return (
     <div className={embedded ? "embedded-controls report-section" : "report-page"}>
       {embedded ? <SectionHeader index="04" title="Configure risk controls" note="Shared by Risk, Optimize and Simulation" /> : <PageHeader eyebrow="RISK CONTROLS" title="Portfolio guardrails" description="Configure the shared limits used by risk analysis, simulation and optimization." />}
-      
+
       <div className="report-section" style={{ marginBottom: "1.5rem" }}>
         <SectionHeader index="P" title="Risk Appetite Presets" note="Select a pre-configured risk profile" />
         <div style={{ display: "flex", gap: "0.75rem", marginTop: "0.5rem" }}>

@@ -55,7 +55,7 @@ function Firewall({
   title: string;
 }) {
   return (
-    <details className="lab-section firewall-disclosure">
+    <details className="lab-section firewall-disclosure" open>
       <summary className="lab-section-title">
         <ShieldCheck size={18} />
         <h2>{title}</h2>
@@ -244,7 +244,7 @@ function MarketSimulationPanel({ mode, scenarios, onEvent }: { mode: "HISTORICAL
         <div className="lab-section-title"><h2>Current → proposed resilience</h2><span>SAME PATHS / SAME CONTROLS</span></div>
         <div className="table-wrap"><table className="comparison-table"><thead><tr><th>Measure</th><th>Current portfolio</th><th>Proposed portfolio</th></tr></thead><tbody>{marketMetrics.map((metric) => <tr key={metric.key}><td>{metric.label}</td><td>{metric.format(result.original[metric.key] as number)}</td><td>{result.optimized ? metric.format(result.optimized[metric.key] as number) : "No verified proposal"}</td></tr>)}</tbody></table></div>
       </section>
-      <details className="lab-section firewall-disclosure"><summary className="lab-section-title"><h2>Control breach probabilities</h2><span>EXPAND DETAIL</span></summary><div className="table-wrap"><table><thead><tr><th>Risk Firewall control</th><th>Current</th><th>Proposed</th></tr></thead><tbody>{Object.entries(result.original.controlBreachProbabilities).map(([control, probability]) => <tr key={control}><td>{names[control] ?? control}</td><td>{pct(probability)}</td><td>{result.optimized ? pct(result.optimized.controlBreachProbabilities[control] ?? 0) : "—"}</td></tr>)}</tbody></table></div></details>
+      <details className="lab-section firewall-disclosure" open><summary className="lab-section-title"><h2>Control breach probabilities</h2><span>EXPAND DETAIL</span></summary><div className="table-wrap"><table><thead><tr><th>Risk Firewall control</th><th>Current</th><th>Proposed</th></tr></thead><tbody>{Object.entries(result.original.controlBreachProbabilities).map(([control, probability]) => <tr key={control}><td>{names[control] ?? control}</td><td>{pct(probability)}</td><td>{result.optimized ? pct(result.optimized.controlBreachProbabilities[control] ?? 0) : "—"}</td></tr>)}</tbody></table></div></details>
       <section className="lab-section"><div className="lab-section-title"><h2>Aegis decision trail</h2><span>ENGINE OUTPUT</span></div><ol className="decision-trail">{result.decisionTrail.map((step, index) => <li key={`${step.stage}-${index}`}><b>{step.stage.replaceAll("_", " ")}</b><span>{step.message}</span></li>)}</ol></section>
     </>}
     {history.length > 1 && <section className="lab-section"><div className="lab-section-title"><h2>Completed simulation comparison</h2><span>THIS SESSION</span></div><div className="table-wrap"><table><thead><tr><th>Model</th><th>Expected return</th><th>5th percentile</th><th>VaR</th><th>Breach probability</th></tr></thead><tbody>{history.map((item) => <tr key={item.mode}><td>{item.mode.replace("_", " ")}</td><td>{pct(item.original.expectedReturn)}</td><td>{pct(item.original.downside5)}</td><td>{pct(item.original.var95)}</td><td>{pct(item.original.probabilityAnyBreach)}</td></tr>)}</tbody></table></div></section>}
@@ -859,7 +859,7 @@ export default function RiskLab({
               )}
             </section>
           )}
-          <details className="lab-section ledger-disclosure">
+          <details className="lab-section ledger-disclosure" open>
             <summary className="lab-section-title">
               <h2>Holding impact ledger</h2>
               <span>Positive changes are gains</span>

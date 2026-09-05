@@ -18,6 +18,16 @@ class Asset(StrictModel):
     liquidityScore: float = Field(ge=0, le=100)
     duration: float = Field(default=0, ge=0)
 
+class AddAssetRequest(StrictModel):
+    name: str = Field(min_length=1)
+    ticker: str = Field(min_length=1)
+    assetClass: str = Field(min_length=1)
+    currentValueCr: float = Field(gt=0)
+    expectedReturnPercent: float = Field(ge=-100, le=1000)
+    volatilityPercent: float = Field(ge=0, le=1000)
+    liquidityScore: float = Field(ge=0, le=100)
+    duration: float = Field(default=0, ge=0)
+
 class RiskLimits(StrictModel):
     maxPortfolioVolatility: float = Field(default=.16, gt=0, le=1)
     maxVaR: float = Field(default=.018, gt=0, le=1)
@@ -36,6 +46,7 @@ class Control(StrictModel):
     status: Literal['PASS','WARNING','BREACH']
     severity: Literal['NONE','MEDIUM','HIGH']
     explanation: str
+    remediation: Optional[str] = None
 
 class Metrics(StrictModel):
     expectedReturn: float
