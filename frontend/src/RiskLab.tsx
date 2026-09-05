@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ArrowRight,
   ArrowDownRight,
@@ -28,6 +28,7 @@ import type {
   BreachChange,
   Risk,
   Assumption,
+  MarketSimulation,
 } from "./types";
 import "./risk-lab.css";
 const pct = (v: number) => `${(v * 100).toFixed(2)}%`;
@@ -174,6 +175,81 @@ function Comparison({ s, r }: { s: Simulation; r?: Rebalance }) {
     </section>
   );
 }
+
+const marketMetrics: { key: keyof MarketSimulation["original"]; label: string; format: (value: number) => string }[] = [
+  { key: "expectedReturn", label: "Expected period return", format: pct },
+  { key: "expectedLoss", label: "Average loss in losing paths", format: pct },
+  { key: "downside5", label: "5th percentile result", format: pct },
+  { key: "var95", label: "Period VaR · 95%", format: pct },
+  { key: "worstLoss", label: "Worst simulated loss", format: pct },
+  { key: "maxDrawdown", label: "Maximum path drawdown", format: pct },
+  { key: "probabilityAnyBreach", label: "Probability of any breach", format: pct },
+];
+
+function MarketSimulationPanel({ mode, scenarios, onEvent }: { mode: "HISTORICAL" | "MONTE_CARLO" | "HYBRID"; scenarios: Scenario[]; onEvent?: (title: string, detail: string) => void }) {
+  const [runs, setRuns] = useState("1000");
+  const [horizon, setHorizon] = useState("21");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [overlay, setOverlay] = useState("market-crash");
+  const [result, setResult] = useState<MarketSimulation>();
+  const [history, setHistory] = useState<MarketSimulation[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => { setResult(undefined); setError(""); }, [mode]);
+
+  async function runMarket() {
+    setBusy(true);
+    setError("");
+    try {
+      const next = await api<MarketSimulation>("/simulate/market", {
+        mode,
+        runs: Number(runs),
+        horizonDays: Number(horizon),
+        seed: 42,
+        ...(mode === "HISTORICAL" && startDate ? { startDate } : {}),
+        ...(mode === "HISTORICAL" && endDate ? { endDate } : {}),
+        ...(mode === "HYBRID" ? { stressScenarioId: overlay } : {}),
+      });
+      setResult(next);
+      setHistory((items) => [next, ...items.filter((item) => item.mode !== next.mode)].slice(0, 3));
+      onEvent?.(`${next.modelLabel} completed`, `${next.runs} matched paths; current breach probability ${pct(next.original.probabilityAnyBreach)}${next.optimized ? ` → ${pct(next.optimized.probabilityAnyBreach)}` : ""}.`);
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <div className="market-simulation">
+    <section className="lab-section market-model-panel">
+      <div className="lab-section-title"><div><span className="lab-kicker">01 / SIMULATION MODEL</span><h2>{mode === "HISTORICAL" ? "Historical rolling simulation" : mode === "MONTE_CARLO" ? "Monte Carlo simulation" : "Hybrid market simulation"}</h2></div><span>LOCAL / SYNTHETIC</span></div>
+      <p className="risk-interpretation">Historical mode replays dated rolling periods. Monte Carlo uses the dataset's daily mean and covariance. Hybrid adds one centralized stress scenario to those same statistically derived paths.</p>
+      <div className="market-controls">
+        <label>Horizon<input type="number" min="1" max="252" value={horizon} onChange={(event) => setHorizon(event.target.value)} /><small>trading days</small></label>
+        {mode !== "HISTORICAL" && <label>Runs<input type="number" min="100" max="2000" step="100" value={runs} onChange={(event) => setRuns(event.target.value)} /><small>fixed seed · 42</small></label>}
+        {mode === "HISTORICAL" && <><label>Start date<input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /><small>optional</small></label><label>End date<input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} /><small>optional</small></label></>}
+        {mode === "HYBRID" && <label>Stress overlay<select value={overlay} onChange={(event) => setOverlay(event.target.value)}>{scenarios.filter((scenario) => !["withdrawal", "custom"].includes(scenario.id)).map((scenario) => <option key={scenario.id} value={scenario.id}>{scenario.name}</option>)}</select><small>central scenario library</small></label>}
+        <Button disabled={busy} onClick={() => void runMarket()}><Play size={15} />{busy ? "Running paths…" : "Run simulation"}</Button>
+      </div>
+    </section>
+    {error && <div className="error" role="alert">{error}</div>}
+    {result && <>
+      <section className="lab-section">
+        <div className="lab-section-title"><div><span className="lab-kicker">02 / MODEL & SOURCE</span><h2>{result.modelLabel}</h2></div><span>{result.runs} PATHS · {result.horizonDays} DAYS</span></div>
+        <div className="proposal-stats"><span>Data source<b>Historical dataset</b><small>{result.periodStart} → {result.periodEnd}</small></span><span>Stress overlay<b>{result.stressOverlay ?? "None"}</b><small>{result.dataSource}</small></span><span>Downside improvement<b>{result.optimized ? `+${pct(result.resilienceImprovement)}` : "—"}</b><small>Optimized minus current 5th percentile</small></span></div>
+        <p className="scenario-explanation">{result.explanation}</p>
+      </section>
+      <section className="lab-section">
+        <div className="lab-section-title"><h2>Current → proposed resilience</h2><span>SAME PATHS / SAME CONTROLS</span></div>
+        <div className="table-wrap"><table className="comparison-table"><thead><tr><th>Measure</th><th>Current portfolio</th><th>Proposed portfolio</th></tr></thead><tbody>{marketMetrics.map((metric) => <tr key={metric.key}><td>{metric.label}</td><td>{metric.format(result.original[metric.key] as number)}</td><td>{result.optimized ? metric.format(result.optimized[metric.key] as number) : "No verified proposal"}</td></tr>)}</tbody></table></div>
+      </section>
+      <details className="lab-section firewall-disclosure"><summary className="lab-section-title"><h2>Control breach probabilities</h2><span>EXPAND DETAIL</span></summary><div className="table-wrap"><table><thead><tr><th>Risk Firewall control</th><th>Current</th><th>Proposed</th></tr></thead><tbody>{Object.entries(result.original.controlBreachProbabilities).map(([control, probability]) => <tr key={control}><td>{names[control] ?? control}</td><td>{pct(probability)}</td><td>{result.optimized ? pct(result.optimized.controlBreachProbabilities[control] ?? 0) : "—"}</td></tr>)}</tbody></table></div></details>
+      <section className="lab-section"><div className="lab-section-title"><h2>Aegis decision trail</h2><span>ENGINE OUTPUT</span></div><ol className="decision-trail">{result.decisionTrail.map((step, index) => <li key={`${step.stage}-${index}`}><b>{step.stage.replaceAll("_", " ")}</b><span>{step.message}</span></li>)}</ol></section>
+    </>}
+    {history.length > 1 && <section className="lab-section"><div className="lab-section-title"><h2>Completed simulation comparison</h2><span>THIS SESSION</span></div><div className="table-wrap"><table><thead><tr><th>Model</th><th>Expected return</th><th>5th percentile</th><th>VaR</th><th>Breach probability</th></tr></thead><tbody>{history.map((item) => <tr key={item.mode}><td>{item.mode.replace("_", " ")}</td><td>{pct(item.original.expectedReturn)}</td><td>{pct(item.original.downside5)}</td><td>{pct(item.original.var95)}</td><td>{pct(item.original.probabilityAnyBreach)}</td></tr>)}</tbody></table></div></section>}
+  </div>;
+}
 export default function RiskLab({
   portfolio,
   scenarios,
@@ -187,6 +263,7 @@ export default function RiskLab({
   onSimulation?: (result?: Simulation) => void;
   onProposal?: (proposal?: Rebalance) => void;
 }) {
+  const [simulationMode, setSimulationMode] = useState<"STRESS" | "HISTORICAL" | "MONTE_CARLO" | "HYBRID">("STRESS");
   const [selected, setSelected] = useState("market-crash"),
     [classShocks, setClassShocks] = useState<Record<string, string>>({
       Equity: "-15",
@@ -311,7 +388,9 @@ export default function RiskLab({
         </span>
         <span>Synthetic data / {portfolio.historyObservations} days</span>
       </div>
-      <div className="lab-workbench">
+      <div className="simulation-mode-strip" aria-label="Simulation mode">{(["STRESS", "HISTORICAL", "MONTE_CARLO", "HYBRID"] as const).map((mode) => <button key={mode} className={simulationMode === mode ? "active" : ""} onClick={() => setSimulationMode(mode)}>{mode.replace("_", " ")}</button>)}</div>
+      {simulationMode !== "STRESS" && <MarketSimulationPanel mode={simulationMode} scenarios={scenarios} onEvent={onEvent} />}
+      <div className="lab-workbench" hidden={simulationMode !== "STRESS"}>
         <div className="scenario-rail">
           <div className="rail-label">
             SCENARIO LIBRARY{" "}
@@ -557,12 +636,12 @@ export default function RiskLab({
           </div>
         </section>
       </div>
-      {error && (
+      {simulationMode === "STRESS" && error && (
         <div className="error" role="alert">
           {error}
         </div>
       )}
-      {result && (
+      {simulationMode === "STRESS" && result && (
         <div className="lab-results" aria-live="polite">
           <div className="result-heading">
             <span className="lab-kicker">02 / TRACE THE CONSEQUENCES</span>
@@ -711,6 +790,11 @@ export default function RiskLab({
               )}
               {proposal.status === "FEASIBLE" && (
                 <>
+                  {proposal.scenarioComparison && <div className="proposal-stats">
+                    <span>Current stress loss<b>{pct(proposal.scenarioComparison.currentLossPercent)}</b><small>{money(proposal.scenarioComparison.currentLoss)}</small></span>
+                    <span>Proposed stress loss<b>{pct(proposal.scenarioComparison.optimizedLossPercent)}</b><small>{money(proposal.scenarioComparison.optimizedLoss)}</small></span>
+                    <span>Capital protected<b>{money(proposal.scenarioComparison.capitalProtected)}</b><small>Same shock · current vs proposed</small></span>
+                  </div>}
                   <div className="proposal-stats">
                     <span>
                       Rebalance turnover<b>{pct(proposal.turnover)}</b>

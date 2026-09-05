@@ -67,6 +67,8 @@ class RiskReport(StrictModel):
     operatingMode: Literal['NORMAL', 'CAUTION', 'DEFENSIVE'] = 'NORMAL'
     components: list[Component]
     explanations: list[str]
+    portfolioScore: float
+    scoreComponents: dict[str, float]
 
 class Portfolio(StrictModel):
     assets: list[Asset]
@@ -87,13 +89,26 @@ class RouteCapitalResponse(StrictModel):
     liquidityTarget: float
     liquidityRepaired: bool
 
+class AssetAssumptionUpdate(StrictModel):
+    expectedReturn: Optional[float] = Field(default=None, ge=-1, le=10)
+    volatility: Optional[float] = Field(default=None, ge=0, le=5)
+    liquidityScore: Optional[float] = Field(default=None, ge=0, le=100)
+    duration: Optional[float] = Field(default=None, ge=0, le=100)
+
+    @model_validator(mode='after')
+    def has_value(self):
+        if all(getattr(self, field) is None for field in ('expectedReturn', 'volatility', 'liquidityScore', 'duration')):
+            raise ValueError('Provide at least one holding assumption to update.')
+        return self
+
 class PortfolioAllocationRequest(StrictModel):
     allocations: Optional[dict[str, float]] = None
     totalValue: Optional[float] = Field(default=None, gt=0)
+    assumptions: Optional[dict[str, AssetAssumptionUpdate]] = None
     @model_validator(mode='after')
     def valid_allocations(self):
-        if not self.allocations and self.totalValue is None:
-            raise ValueError('Provide allocation weights by holding ID or a total portfolio value.')
+        if not self.allocations and self.totalValue is None and not self.assumptions:
+            raise ValueError('Provide allocation weights, a total portfolio value or holding assumptions.')
         if self.allocations is not None:
             if any(not math.isfinite(v) or v < 0 or v > 1 for v in self.allocations.values()):
                 raise ValueError('Allocation weights must be finite fractions from 0 to 1.')
@@ -199,6 +214,14 @@ class Trade(StrictModel):
     targetValue: float
     liquidityScore: float
     locked: bool
+    weightChange: float = 0
+    reason: str = ''
+    triggeredConstraint: str = ''
+    riskImpact: str = ''
+
+class DecisionStep(StrictModel):
+    stage: str
+    message: str
 
 class RebalanceResult(StrictModel):
     minimumTradeAmount: float = 1000
@@ -217,5 +240,45 @@ class RebalanceResult(StrictModel):
     externalCapital: float = 0
     limits: RiskLimits
     costBenefit: Optional[dict[str, float]] = None
+    changeSummary: list[str] = Field(default_factory=list)
+    decisionTrail: list[DecisionStep] = Field(default_factory=list)
+    scenarioComparison: Optional[dict[str, float]] = None
+
+class MarketSimulationRequest(StrictModel):
+    mode: Literal['HISTORICAL', 'MONTE_CARLO', 'HYBRID']
+    runs: int = Field(default=1000, ge=100, le=2000)
+    horizonDays: int = Field(default=21, ge=1, le=252)
+    seed: int = Field(default=42, ge=0, le=2_147_483_647)
+    startDate: Optional[str] = None
+    endDate: Optional[str] = None
+    stressScenarioId: Optional[Literal['market-crash','tech-selloff','interest-rate','liquidity-crisis','inflation-shock','global-recession','equity-rally','broad-market-stress']] = 'market-crash'
+
+class SimulationStatistics(StrictModel):
+    expectedReturn: float
+    expectedLoss: float
+    volatility: float
+    downside5: float
+    var95: float
+    worstLoss: float
+    maxDrawdown: float
+    probabilityAnyBreach: float
+    averageBreaches: float
+    controlBreachProbabilities: dict[str, float]
+
+class MarketSimulationResult(StrictModel):
+    mode: Literal['HISTORICAL', 'MONTE_CARLO', 'HYBRID']
+    modelLabel: str
+    dataSource: str
+    periodStart: str
+    periodEnd: str
+    runs: int
+    horizonDays: int
+    stressOverlay: Optional[str] = None
+    original: SimulationStatistics
+    optimized: Optional[SimulationStatistics] = None
+    optimizedAvailable: bool
+    resilienceImprovement: float
+    explanation: str
+    decisionTrail: list[DecisionStep] = Field(default_factory=list)
 
 Scenario.model_rebuild()

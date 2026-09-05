@@ -6,11 +6,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from uuid import uuid4
 from collections import OrderedDict
-from .models import Asset, Portfolio, PortfolioAllocationRequest, RiskLimits, RiskReport, Scenario, ScenarioRequest, CustomRequest, WithdrawalRequest, SimulationResult, RebalanceResult, RouteCapitalRequest, RouteCapitalResponse
+from .models import Asset, Portfolio, PortfolioAllocationRequest, RiskLimits, RiskReport, Scenario, ScenarioRequest, CustomRequest, WithdrawalRequest, SimulationResult, RebalanceResult, RouteCapitalRequest, RouteCapitalResponse, MarketSimulationRequest, MarketSimulationResult
 from .risk_engine import evaluate
 from .simulation_engine import simulate
 from .scenarios import catalog
 from .optimization_engine import optimize
+from .market_simulation import run_market_simulation
 
 DATA = Path(__file__).parent / 'data'
 ASSETS = [Asset.model_validate(a) for a in json.loads((DATA/'portfolio.json').read_text())]
@@ -43,8 +44,16 @@ def update_portfolio(request: PortfolioAllocationRequest):
     global _assets
     current = assets_snapshot()
     total = request.totalValue if request.totalValue is not None else sum(asset.currentValue for asset in current)
-    allocations = request.allocations if request.allocations is not None else {asset.id: asset.currentWeight for asset in current}
+    allocations = dict(request.allocations) if request.allocations is not None else {asset.id: asset.currentWeight for asset in current}
     expected = {asset.id for asset in current}
+    # Auto-fill omitted assets
+    for asset in current:
+        if asset.id not in allocations:
+            if asset.id == 'cash':
+                non_cash_sum = sum(v for k, v in allocations.items() if k != 'cash')
+                allocations['cash'] = max(0.0, 1.0 - non_cash_sum)
+            else:
+                allocations[asset.id] = 0.0
     received = set(allocations)
     if received != expected:
         missing, unknown = sorted(expected-received), sorted(received-expected)
@@ -52,12 +61,24 @@ def update_portfolio(request: PortfolioAllocationRequest):
         if missing: detail.append('Missing holding IDs: ' + ', '.join(missing))
         if unknown: detail.append('Unknown holding IDs: ' + ', '.join(unknown))
         raise HTTPException(status_code=422, detail='; '.join(detail))
+    assumptions = request.assumptions or {}
+    unknown_assumptions = sorted(set(assumptions) - expected)
+    if unknown_assumptions:
+        raise HTTPException(status_code=422, detail='Unknown holding assumption IDs: ' + ', '.join(unknown_assumptions))
     allocation_total = sum(allocations.values())
-    normalized = {asset_id: weight / allocation_total for asset_id, weight in allocations.items()}
-    updated = [asset.model_copy(update={
-        'currentWeight': normalized[asset.id],
-        'currentValue': total * normalized[asset.id],
-    }) for asset in current]
+    if allocation_total > 1.0001:
+        raise HTTPException(status_code=422, detail=f'Total target allocation ({allocation_total*100:.1f}%) cannot exceed 100%.')
+    normalized = {asset_id: weight / (allocation_total if allocation_total > 0 else 1.0) for asset_id, weight in allocations.items()}
+    updated = []
+    for asset in current:
+        assumption = assumptions.get(asset.id)
+        updates = {
+            'currentWeight': normalized[asset.id],
+            'currentValue': total * normalized[asset.id],
+        }
+        if assumption is not None:
+            updates.update(assumption.model_dump(exclude_none=True))
+        updated.append(asset.model_copy(update=updates))
     with _lock: _assets = [asset.model_copy(deep=True) for asset in updated]
     return Portfolio(assets=updated,totalValue=total,historyObservations=len(RETURNS))
 
@@ -166,6 +187,13 @@ def withdrawal(request: WithdrawalRequest):
     amount = request.withdrawalAmount if request.withdrawalAmount is not None else sum(a.currentValue for a in assets)*request.withdrawalPercent/100
     return remember(simulate(assets,RETURNS,limits_snapshot(),withdrawal=amount))
 
+@app.post('/api/simulate/market', response_model=MarketSimulationResult)
+def market_simulation(request: MarketSimulationRequest):
+    try:
+        return run_market_simulation(assets_snapshot(), RETURNS, limits_snapshot(), request)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
 
 def remember(result):
     result.simulationId = uuid4().hex
@@ -183,8 +211,48 @@ def rebalance(simulation_id: str):
         current_limits = _limits.model_copy(deep=True)
     if current_limits != saved.limits:
         raise HTTPException(status_code=409,detail='Risk limits changed. Run the scenario again before requesting a rebalance.')
-    return optimize(saved.stressedAssets, RETURNS, current_limits,
+    # Ex-ante resilience: optimize the unchanged current portfolio, then apply
+    # the exact same saved holding shocks. This is separate from repairing the
+    # already-stressed portfolio returned above.
+    baseline_target = None
+    if saved.assumptions:
+        impacts = {impact.name: impact for impact in saved.assetImpacts}
+        assumption_by_id = {assumption.assetId: assumption for assumption in saved.assumptions}
+        current_assets = [asset.model_copy(update={
+            'currentValue': impacts[asset.name].originalValue,
+            'currentWeight': impacts[asset.name].originalWeight,
+            'liquidityScore': assumption_by_id[asset.id].liquidityBefore,
+        }) for asset in saved.stressedAssets]
+        baseline_target = optimize(current_assets, RETURNS, current_limits,
+            original_capital=sum(a.currentValue for a in current_assets))
+    result = optimize(saved.stressedAssets, RETURNS, current_limits,
         original_capital=saved.originalPortfolioValue, consumed_turnover=saved.riskAfter.metrics.turnover)
+    if baseline_target is not None:
+        if baseline_target.status == 'FEASIBLE' and baseline_target.assets:
+            by_id = {assumption.assetId: assumption for assumption in saved.assumptions}
+            stressed_target = []
+            for asset in baseline_target.assets:
+                assumption = by_id[asset.id]
+                liquidity_ratio = assumption.liquidityAfter / assumption.liquidityBefore if assumption.liquidityBefore else 1
+                stressed_target.append(asset.model_copy(update={
+                    'currentValue': asset.currentValue * (1 + assumption.shockPercent / 100),
+                    'liquidityScore': asset.liquidityScore * liquidity_ratio,
+                }))
+            optimized_value = sum(a.currentValue for a in stressed_target)
+            for asset in stressed_target:
+                asset.currentWeight = asset.currentValue / optimized_value if optimized_value else 0
+            optimized_risk = evaluate(stressed_target, RETURNS, current_limits)
+            optimized_loss = baseline_target.totalValue - optimized_value
+            result.scenarioComparison = {
+                'currentLoss': saved.marketLoss,
+                'optimizedLoss': optimized_loss,
+                'capitalProtected': saved.marketLoss - optimized_loss,
+                'currentLossPercent': saved.marketLoss / saved.originalPortfolioValue if saved.originalPortfolioValue else 0,
+                'optimizedLossPercent': optimized_loss / baseline_target.totalValue if baseline_target.totalValue else 0,
+                'currentBreaches': float(len(saved.breachedControls)),
+                'optimizedBreaches': float(sum(c.status == 'BREACH' for c in optimized_risk.controls)),
+            }
+    return result
 
 DIST_DIR = Path(__file__).parent.parent / 'frontend' / 'dist'
 if DIST_DIR.exists():

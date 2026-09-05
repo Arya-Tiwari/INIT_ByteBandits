@@ -19,6 +19,12 @@ export type Asset = {
   liquidityScore: number;
   duration: number;
 };
+export type AssetAssumptionUpdate = Pick<Asset, "expectedReturn" | "volatility" | "liquidityScore" | "duration">;
+export type PortfolioUpdate = {
+  allocations?: Record<string, number>;
+  totalValue?: number;
+  assumptions?: Record<string, AssetAssumptionUpdate>;
+};
 export type Limits = Record<string, any>;
 export type Control = {
   controlName: string;
@@ -57,6 +63,8 @@ export type Risk = {
     contribution: number;
   }[];
   explanations: string[];
+  portfolioScore: number;
+  scoreComponents: Record<string, number>;
 };
 export type Portfolio = {
   assets: Asset[];
@@ -152,6 +160,10 @@ export type Rebalance = {
     targetValue: number;
     liquidityScore: number;
     locked: boolean;
+    weightChange: number;
+    reason: string;
+    triggeredConstraint: string;
+    riskImpact: string;
   }[];
   assets: Asset[];
   risk: Risk | null;
@@ -162,6 +174,49 @@ export type Rebalance = {
   externalCapital: number;
   limits: Limits;
   costBenefit?: CostBenefit;
+  changeSummary: string[];
+  decisionTrail: DecisionStep[];
+  scenarioComparison?: {
+    currentLoss: number;
+    optimizedLoss: number;
+    capitalProtected: number;
+    currentLossPercent: number;
+    optimizedLossPercent: number;
+    currentBreaches: number;
+    optimizedBreaches: number;
+  };
+};
+
+export type DecisionStep = { stage: string; message: string };
+
+export type SimulationStatistics = {
+  expectedReturn: number;
+  expectedLoss: number;
+  volatility: number;
+  downside5: number;
+  var95: number;
+  worstLoss: number;
+  maxDrawdown: number;
+  probabilityAnyBreach: number;
+  averageBreaches: number;
+  controlBreachProbabilities: Record<string, number>;
+};
+
+export type MarketSimulation = {
+  mode: "HISTORICAL" | "MONTE_CARLO" | "HYBRID";
+  modelLabel: string;
+  dataSource: string;
+  periodStart: string;
+  periodEnd: string;
+  runs: number;
+  horizonDays: number;
+  stressOverlay: string | null;
+  original: SimulationStatistics;
+  optimized: SimulationStatistics | null;
+  optimizedAvailable: boolean;
+  resilienceImprovement: number;
+  explanation: string;
+  decisionTrail: DecisionStep[];
 };
 
 export function exportRebalanceCsv(rebalance: Rebalance): string {

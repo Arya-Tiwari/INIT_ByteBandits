@@ -1,4 +1,4 @@
-# AEGIS — Automated Asset & Capital Optimization Control Engine
+# AEGIS — Capital Compass
 
 Local hackathon MVP: deterministic portfolio risk calculations, eight configurable controls, eight market scenarios, editable portfolio allocations, custom asset-class shocks and capital withdrawals. React + Vite + TypeScript + Tailwind + a shadcn-style Radix button + Recharts + Lucide; Python + FastAPI + NumPy/Pandas. SciPy provides the constrained rebalance solver; NumPy/Pandas provide the risk calculations.
 

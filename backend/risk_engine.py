@@ -48,7 +48,21 @@ def evaluate(assets: list[Asset], returns: pd.DataFrame, limits: RiskLimits, tur
         f'Historical one-day expected shortfall is {cvar:.2%}; annualized volatility is {volatility:.2%}.']
     cvar_breached = any(c.controlName == 'maxCVaR' and c.status == 'BREACH' for c in controls)
     operating_mode = 'DEFENSIVE' if (cvar_breached or drawdown > .20) else 'CAUTION' if any(c.status == 'BREACH' for c in controls) else 'NORMAL'
+    compliance = 30 * sum(1 if c.status == 'PASS' else .5 if c.status == 'WARNING' else 0 for c in controls) / len(controls)
+    active = int(np.count_nonzero(weights > 1e-10))
+    diversification = 20 * max(0., 1 - metrics.concentrationRisk) / (1 - 1/active) if active > 1 else 0.
+    score_components = {
+        'Risk compliance': round(compliance, 2),
+        'Diversification': round(min(20., diversification), 2),
+        'Liquidity': round(15 * liquidity / 100, 2),
+        'Volatility / risk': round(20 * max(0., 1 - volatility / .30), 2),
+        'Historical resilience': round(15 * max(0., 1 - drawdown / .40), 2),
+    }
+    if total <= 0:
+        score_components = {name: 0. for name in score_components}
+    portfolio_score = round(min(100., max(0., sum(score_components.values()))), 2)
     return RiskReport(metrics=metrics, controls=controls, riskScore=score,
         riskLevel='LOW' if score < 25 else 'MODERATE' if score < 50 else 'HIGH' if score < 75 else 'CRITICAL',
         operatingMode=operating_mode,
-        components=components, explanations=explanations)
+        components=components, explanations=explanations,
+        portfolioScore=portfolio_score, scoreComponents=score_components)

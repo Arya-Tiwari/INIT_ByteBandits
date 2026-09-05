@@ -346,3 +346,77 @@ def test_demo_reset_endpoint():
     assert p['totalValue'] == pytest.approx(500_000_000.0)
     l = client.get('/api/risk/limits').json()
     assert l['maxPortfolioVolatility'] == 0.16
+
+
+def test_portfolio_health_score_is_transparent_and_bounded():
+    report = client.get('/api/risk').json()
+    assert 0 <= report['portfolioScore'] <= 100
+    assert report['portfolioScore'] == pytest.approx(sum(report['scoreComponents'].values()), abs=.02)
+    assert set(report['scoreComponents']) == {'Risk compliance', 'Diversification', 'Liquidity', 'Volatility / risk', 'Historical resilience'}
+
+
+def test_recommendations_include_deterministic_evidence_and_trail():
+    proposal = client.post('/api/optimize').json()
+    assert proposal['status'] == 'FEASIBLE'
+    assert proposal['decisionTrail']
+    assert proposal['changeSummary']
+    for trade in proposal['trades']:
+        assert trade['reason'] and trade['triggeredConstraint'] and trade['riskImpact']
+        assert trade['weightChange'] == pytest.approx(trade['targetWeight'] - trade['stressedWeight'])
+    assert proposal['decisionTrail'][-1]['stage'] == 'verification'
+    assert 'no orders were executed' in proposal['decisionTrail'][-1]['message']
+
+
+@pytest.mark.parametrize('mode', ['HISTORICAL', 'MONTE_CARLO', 'HYBRID'])
+def test_market_simulation_modes_use_real_backend_data(mode):
+    body = {'mode': mode, 'runs': 100, 'horizonDays': 10, 'seed': 7}
+    response = client.post('/api/simulate/market', json=body)
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data['periodStart'] == str(RETURNS.index[0])
+    assert data['periodEnd'] == str(RETURNS.index[-1])
+    assert 'synthetic historical' in data['dataSource'].lower()
+    assert data['runs'] == (len(RETURNS) - 10 + 1 if mode == 'HISTORICAL' else 100)
+    assert 0 <= data['original']['probabilityAnyBreach'] <= 1
+    assert set(data['original']['controlBreachProbabilities']) == {p[0] for p in firewall.POLICIES}
+    assert data['optimizedAvailable'] and data['optimized'] is not None
+    if mode == 'HYBRID':
+        assert data['stressOverlay'] == 'Market Crash'
+        assert data['original']['expectedReturn'] < -.05
+
+
+def test_monte_carlo_is_reproducible_and_same_paths_show_resilience():
+    body = {'mode': 'HYBRID', 'runs': 100, 'horizonDays': 21, 'seed': 123, 'stressScenarioId': 'market-crash'}
+    first = client.post('/api/simulate/market', json=body).json()
+    second = client.post('/api/simulate/market', json=body).json()
+    assert first == second
+    assert first['resilienceImprovement'] == pytest.approx(first['optimized']['downside5'] - first['original']['downside5'])
+    assert first['optimized']['worstLoss'] < first['original']['worstLoss']
+
+
+def test_historical_period_validation():
+    bad = client.post('/api/simulate/market', json={'mode': 'HISTORICAL', 'horizonDays': 21, 'startDate': '2025-11-20'})
+    assert bad.status_code == 422
+    reversed_period = client.post('/api/simulate/market', json={'mode': 'HISTORICAL', 'startDate': '2025-01-01', 'endDate': '2024-01-01'})
+    assert reversed_period.status_code == 422
+
+
+def test_stress_rebalance_includes_same_scenario_comparison():
+    simulation = client.post('/api/simulate', json={'scenarioId': 'market-crash'}).json()
+    proposal = client.post(f"/api/simulate/{simulation['simulationId']}/rebalance").json()
+    comparison = proposal['scenarioComparison']
+    assert comparison['currentLoss'] == pytest.approx(simulation['marketLoss'])
+    assert comparison['optimizedLoss'] < comparison['currentLoss']
+    assert comparison['capitalProtected'] == pytest.approx(comparison['currentLoss'] - comparison['optimizedLoss'])
+    allocations = {a.id: a.currentWeight for a in ASSETS}
+    allocations['eq-large'] -= .03
+    allocations['cash'] += .03
+    client.post('/api/portfolio', json={'allocations': allocations})
+    repeated = client.post(f"/api/simulate/{simulation['simulationId']}/rebalance").json()
+    assert repeated['scenarioComparison'] == comparison
+
+
+def test_current_metrics_are_consistent_across_api_flows():
+    current = client.get('/api/risk').json()
+    stress = client.post('/api/simulate', json={'scenarioId': 'market-crash'}).json()
+    assert stress['riskBefore'] == current

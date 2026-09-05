@@ -44,6 +44,43 @@ def test_portfolio_allocations_can_be_updated_and_recalculated():
     assert sum(asset['currentValue'] for asset in data['assets']) == pytest.approx(data['totalValue'])
     assert client.get('/api/risk').json()['metrics']['cashWeight'] == pytest.approx(.09)
 
+def test_holding_assumptions_are_editable_and_reach_shared_calculations():
+    client.post('/api/reset')
+    baseline = client.get('/api/portfolio').json()
+    large_cap = next(asset for asset in baseline['assets'] if asset['id'] == 'eq-large')
+    response = client.post('/api/portfolio', json={'assumptions': {
+        'eq-large': {
+            'expectedReturn': .22,
+            'volatility': .31,
+            'liquidityScore': 40,
+            'duration': 3.5,
+        }
+    }})
+    assert response.status_code == 200, response.text
+    updated = next(asset for asset in response.json()['assets'] if asset['id'] == 'eq-large')
+    assert updated['expectedReturn'] == pytest.approx(.22)
+    assert updated['volatility'] == pytest.approx(.31)
+    assert updated['liquidityScore'] == pytest.approx(40)
+    assert updated['duration'] == pytest.approx(3.5)
+    risk = client.get('/api/risk').json()['metrics']
+    expected_return_delta = large_cap['currentWeight'] * (.22 - large_cap['expectedReturn'])
+    liquidity_delta = large_cap['currentWeight'] * (40 - large_cap['liquidityScore'])
+    baseline_risk = evaluate(ASSETS, RETURNS, RiskLimits()).metrics
+    assert risk['expectedReturn'] == pytest.approx(baseline_risk.expectedReturn + expected_return_delta)
+    assert risk['liquidityScore'] == pytest.approx(baseline_risk.liquidityScore + liquidity_delta)
+    assert client.post('/api/optimize').status_code == 200
+    client.post('/api/reset')
+
+@pytest.mark.parametrize('assumptions', [
+    {'eq-large': {'expectedReturn': -1.01}},
+    {'eq-large': {'volatility': -0.01}},
+    {'eq-large': {'liquidityScore': 101}},
+    {'eq-large': {'duration': -1}},
+    {'unknown': {'expectedReturn': .1}},
+])
+def test_invalid_holding_assumptions_are_rejected(assumptions):
+    assert client.post('/api/portfolio', json={'assumptions': assumptions}).status_code == 422
+
 def test_invalid_portfolio_allocations_are_rejected():
     assert client.post('/api/portfolio', json={'allocations': {'eq-large': .5}}).status_code == 422
     invalid = {asset.id: asset.currentWeight for asset in ASSETS}

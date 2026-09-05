@@ -33,7 +33,9 @@ def optimize(assets, returns, limits, original_capital=None, consumed_turnover=0
     def unchanged_result():
         trades=[Trade(assetId=a.id,name=a.name,action='HOLD',amount=0,
             stressedWeight=float(w),targetWeight=float(w),targetValue=a.currentValue,
-            liquidityScore=a.liquidityScore,locked=a.liquidityScore < TRADE_LIQUIDITY_FLOOR)
+            liquidityScore=a.liquidityScore,locked=a.liquidityScore < TRADE_LIQUIDITY_FLOOR,
+            reason=f'{a.name} remains at {w:.2%}; every configured control already passes and trading would add cost without a required repair.',
+            triggeredConstraint='No breach',riskImpact='No change; all controls remain compliant.')
             for a,w in zip(assets,w0)]
         return RebalanceResult(status='FEASIBLE',
             objective='No repair is required because the input portfolio already passes every Risk Firewall control. The optimizer preserves the portfolio, uses no turnover and incurs no transaction cost.',
@@ -43,7 +45,12 @@ def optimize(assets, returns, limits, original_capital=None, consumed_turnover=0
             cumulativeTurnover=consumed_turnover,totalValue=total,limits=limits,
             minimumTradeAmount=MINIMUM_TRADE_AMOUNT,
             costBenefit={'transactionCostBps':15.0,'transactionCost':0.0,'turnoverValue':0.0,
-                'safetyScoreChange':0.0,'expectedReturnChange':0.0,'volatilityChange':0.0})
+                'safetyScoreChange':0.0,'expectedReturnChange':0.0,'volatilityChange':0.0},
+            decisionTrail=[
+                {'stage':'risk_analysis','message':f'Portfolio analysed at {before.metrics.volatility:.2%} annualized volatility.'},
+                {'stage':'control','message':'Every configured Risk Firewall control passed.'},
+                {'stage':'optimization','message':'No mandatory rebalance was generated because unnecessary trading would add cost.'},
+            ])
     if not any(control.status == 'BREACH' for control in before.controls):
         return unchanged_result()
     locked = np.array([a.liquidityScore < TRADE_LIQUIDITY_FLOOR or (a.currentValue == 0 and a.assetClass != 'Cash') for a in assets])
@@ -165,12 +172,39 @@ def optimize(assets, returns, limits, original_capital=None, consumed_turnover=0
         return RebalanceResult(status='NOT_FOUND',explanation='Linear funding constraints are feasible, but the numerical solver did not find an allocation passing every risk limit and the minimum-trade threshold. This is not a proof that none exists; no trades are proposed.',conflicts=conflicts,**empty)
     _,w,checked=min(accepted,key=lambda item:item[0])
     proposed=portfolio(w)
+    before_breaches = {c.controlName: c for c in before.controls if c.status == 'BREACH'}
+    current_classes = {cls: sum(weight for asset, weight in zip(assets, w0) if asset.assetClass == cls) for cls in {a.assetClass for a in assets}}
+    target_classes = {cls: sum(weight for asset, weight in zip(assets, w) if asset.assetClass == cls) for cls in current_classes}
+    risk_impact = f'Risk score {before.riskScore:.1f} → {checked.riskScore:.1f}; volatility {before.metrics.volatility:.2%} → {checked.metrics.volatility:.2%}; breaches {len(before_breaches)} → {sum(c.status == "BREACH" for c in checked.controls)}.'
     trades=[]
     for a,b,lock in zip(assets,proposed,locked):
         delta=b.currentValue-a.currentValue
+        action='HOLD' if abs(delta)<.01 else 'BUY' if delta>0 else 'SELL'
+        change=b.currentWeight-a.currentValue/total
+        trigger='Historical variance and transaction-cost objective'
+        if action == 'HOLD':
+            trigger='Liquidity restriction' if lock else 'No material allocation change'
+            reason=(f'{a.name} is locked at {a.currentValue/total:.2%} because its liquidity score is {a.liquidityScore:.0f}/100, below the tradability floor of {TRADE_LIQUIDITY_FLOOR}/100.' if lock else
+                f'{a.name} remains at {a.currentValue/total:.2%}; the funded solution requires no trade above ₹{MINIMUM_TRADE_AMOUNT:,.0f}.')
+        elif action == 'SELL' and a.currentValue/total > limits.maxSingleAssetWeight:
+            trigger='Maximum single asset exposure'
+            reason=f'{a.name} is {a.currentValue/total:.2%}, above the {limits.maxSingleAssetWeight:.2%} single-asset limit. Reduce it to {b.currentWeight:.2%} ({abs(change):.2%} of portfolio capital).'
+        elif action == 'SELL' and current_classes[a.assetClass] > limits.maxAssetClassWeight and target_classes[a.assetClass] < current_classes[a.assetClass]:
+            trigger='Maximum asset class exposure'
+            reason=f'{a.assetClass} totals {current_classes[a.assetClass]:.2%}, above the {limits.maxAssetClassWeight:.2%} class limit. Reducing {a.name} from {a.currentValue/total:.2%} to {b.currentWeight:.2%} helps restore compliance.'
+        elif action == 'BUY' and a.assetClass == 'Cash' and 'minimumCashWeight' in before_breaches:
+            trigger='Minimum cash reserve'
+            reason=f'Cash is {before.metrics.cashWeight:.2%}, below the {limits.minimumCashWeight:.2%} minimum. Increase {a.name} from {a.currentValue/total:.2%} to {b.currentWeight:.2%} to restore the reserve.'
+        elif action == 'BUY' and 'minimumLiquidityScore' in before_breaches:
+            trigger='Minimum portfolio liquidity'
+            reason=f'Portfolio liquidity is {before.metrics.liquidityScore:.1f}/100, below the {limits.minimumLiquidityScore:.1f}/100 floor. Increase {a.name} from {a.currentValue/total:.2%} to {b.currentWeight:.2%}; its liquidity score is {a.liquidityScore:.0f}/100.'
+        else:
+            verb='Increase' if action == 'BUY' else 'Reduce'
+            reason=f'{verb} {a.name} from {a.currentValue/total:.2%} to {b.currentWeight:.2%} ({abs(change):.2%} of portfolio capital) as part of the lowest verified historical-variance solution after transaction cost and return constraints.'
         trades.append(Trade(assetId=a.id,name=a.name,action='HOLD' if abs(delta)<.01 else 'BUY' if delta>0 else 'SELL',
             amount=abs(delta),stressedWeight=a.currentValue/total,targetWeight=b.currentWeight,targetValue=b.currentValue,
-            liquidityScore=a.liquidityScore,locked=bool(lock)))
+            liquidityScore=a.liquidityScore,locked=bool(lock),weightChange=change,
+            reason=reason,triggeredConstraint=trigger,riskImpact=risk_impact))
     turnover_pct = turnover(w)
     turnover_val = round(turnover_pct * total, 2)
     tx_cost = round(turnover_val * TRANSACTION_COST_RATE, 2)
@@ -185,6 +219,15 @@ def optimize(assets, returns, limits, original_capital=None, consumed_turnover=0
         "expectedReturnChange": ret_delta,
         "volatilityChange": vol_delta
     }
+    changes = [f'{cls}: {current_classes[cls]:.2%} → {target_classes[cls]:.2%} ({target_classes[cls]-current_classes[cls]:+.2%})'
+        for cls in sorted(current_classes) if abs(target_classes[cls]-current_classes[cls]) >= .0001]
+    trail = [{'stage':'risk_analysis','message':f'Portfolio analysed at {before.metrics.volatility:.2%} annualized volatility with risk score {before.riskScore:.1f}/100.'}]
+    trail.extend({'stage':'control','message':c.explanation} for c in before.controls if c.status == 'BREACH')
+    trail.append({'stage':'optimization','message':f'Evaluated funded allocations under a {limits.maximumTurnover:.2%} cumulative turnover ceiling and {expected_return_floor:.2%} expected-return floor.'})
+    trail.extend({'stage':'recommendation','message':f'{t.action} {t.name}: {t.stressedWeight:.2%} → {t.targetWeight:.2%}. {t.triggeredConstraint}.'} for t in trades if t.action != 'HOLD')
+    remaining=sum(c.status == 'BREACH' for c in checked.controls)
+    trail.append({'stage':'verification','message':f'The shared Risk Firewall rechecked the proposal: {remaining} breaches remain and no orders were executed.'})
     return RebalanceResult(status='FEASIBLE',minimumTradeAmount=MINIMUM_TRADE_AMOUNT, explanation=f'Sub-threshold trades were frozen and the allocation was re-solved for funding and policy compliance. The proposal minimizes historical variance plus estimated transaction cost while keeping expected return at or above {expected_return_floor:.2%}. Sales fund purchases; no external capital is added. No trades have been executed.',
         trades=trades,assets=proposed,risk=checked,firewallChanges=firewall.transitions(before,checked),
-        turnover=turnover_pct,cumulativeTurnover=checked.metrics.turnover,totalValue=total,limits=limits,costBenefit=cost_benefit)
+        turnover=turnover_pct,cumulativeTurnover=checked.metrics.turnover,totalValue=total,limits=limits,costBenefit=cost_benefit,
+        changeSummary=changes,decisionTrail=trail)
