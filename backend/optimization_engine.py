@@ -142,6 +142,24 @@ def optimize(assets, returns, limits, original_capital=None, consumed_turnover=0
             amount=abs(delta),stressedWeight=a.currentValue/total,targetWeight=b.currentWeight,targetValue=b.currentValue,
             liquidityScore=a.liquidityScore,locked=bool(lock)))
     before=firewall.inspect_portfolio(assets,returns,limits,consumed_turnover)
+    turnover_pct = turnover(w)
+    turnover_val = round(turnover_pct * total, 2)
+    tx_cost = round(turnover_val * 0.0015, 2)
+    safety_score_delta = round(before.riskScore - checked.riskScore, 2)
+    ret_delta = round(checked.metrics.expectedReturn - before.metrics.expectedReturn, 4)
+    vol_delta = round(checked.metrics.volatility - before.metrics.volatility, 4)
+    est_benefit = round(max(0.0, safety_score_delta / 100.0 * total * 0.05 + max(0.0, ret_delta) * total), 2)
+    bc_ratio = round(est_benefit / tx_cost, 2) if tx_cost > 0 else 999.0
+    cost_benefit = {
+        "transactionCostBps": 15.0,
+        "transactionCost": tx_cost,
+        "turnoverValue": turnover_val,
+        "estimatedBenefit": est_benefit,
+        "benefitCostRatio": bc_ratio,
+        "safetyScoreChange": safety_score_delta,
+        "expectedReturnChange": ret_delta,
+        "volatilityChange": vol_delta
+    }
     return RebalanceResult(status='FEASIBLE',minimumTradeAmount=MINIMUM_TRADE_AMOUNT, explanation='Sub-threshold trades were frozen and the allocation was re-solved for funding and policy compliance. A funded proposal passes every Risk Firewall limit. Sales fund purchases; no external capital is added. Holdings with liquidity below 70 and wiped-out positions remain locked. No trades have been executed.',
         trades=trades,assets=proposed,risk=checked,firewallChanges=firewall.transitions(before,checked),
-        turnover=turnover(w),cumulativeTurnover=checked.metrics.turnover,totalValue=total,limits=limits)
+        turnover=turnover_pct,cumulativeTurnover=checked.metrics.turnover,totalValue=total,limits=limits,costBenefit=cost_benefit)

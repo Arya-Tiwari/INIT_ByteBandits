@@ -177,9 +177,11 @@ function Comparison({ s, r }: { s: Simulation; r?: Rebalance }) {
 export default function RiskLab({
   portfolio,
   scenarios,
+  onEvent,
 }: {
   portfolio: Portfolio;
   scenarios: Scenario[];
+  onEvent?: (title: string, detail: string) => void;
 }) {
   const [selected, setSelected] = useState("market-crash"),
     [classShocks, setClassShocks] = useState<Record<string, string>>({
@@ -264,7 +266,9 @@ export default function RiskLab({
             ? { withdrawalPercent: n }
             : { withdrawalAmount: n * 1e7 };
       }
-      setResult(await api<Simulation>(path, body));
+      const nextResult = await api<Simulation>(path, body);
+      setResult(nextResult);
+      onEvent?.(`${nextResult.scenarioName} simulated`, `${nextResult.marketLoss < 0 ? "Market gain" : "Market loss"} ${money(nextResult.marketLoss)}; ${nextResult.breachedControls.length} controls breached after shock.`);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -277,9 +281,9 @@ export default function RiskLab({
     setError("");
     setProposal(undefined);
     try {
-      setProposal(
-        await api<Rebalance>(`/simulate/${result.simulationId}/rebalance`, {}),
-      );
+      const nextProposal = await api<Rebalance>(`/simulate/${result.simulationId}/rebalance`, {});
+      setProposal(nextProposal);
+      onEvent?.("Stress intervention generated", nextProposal.status === "FEASIBLE" ? `AEGIS proposed ${nextProposal.trades.filter((trade) => trade.action !== "HOLD").length} funded trades and rechecked the stressed portfolio.` : nextProposal.explanation);
     } catch (e) {
       setError((e as Error).message);
     } finally {

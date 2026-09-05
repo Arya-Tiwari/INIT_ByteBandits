@@ -26,8 +26,10 @@ def evaluate(assets: list[Asset], returns: pd.DataFrame, limits: RiskLimits, tur
     largest_class = max(classes, key=classes.get)
     largest_asset = assets[int(np.argmax(weights))]
     liquidity = float(weights @ np.array([a.liquidityScore for a in assets]))
-    metrics = Metrics(expectedReturn=float(weights @ np.array([a.expectedReturn for a in assets])),
-        volatility=volatility, var95=var, cvar95=cvar, maxDrawdown=drawdown,
+    expected_return = float(weights @ np.array([a.expectedReturn for a in assets]))
+    sharpe = (expected_return - .04) / volatility if volatility > 0 else 0.
+    metrics = Metrics(expectedReturn=expected_return,
+        volatility=volatility, sharpeRatio=float(sharpe), var95=var, cvar95=cvar, maxDrawdown=drawdown,
         liquidityScore=liquidity, concentrationRisk=float(weights @ weights),
         largestAssetExposure=float(max(weights)), largestAssetName=largest_asset.name,
         largestAssetClassExposure=classes[largest_class], largestAssetClass=largest_class,
@@ -44,8 +46,9 @@ def evaluate(assets: list[Asset], returns: pd.DataFrame, limits: RiskLimits, tur
     explanations = [c.explanation for c in controls if c.status != 'PASS']
     explanations += [f'{largest_class} is the largest asset class at {classes[largest_class]:.1%}.',
         f'Historical one-day expected shortfall is {cvar:.2%}; annualized volatility is {volatility:.2%}.']
-    if total == 0:
-        explanations.insert(0, 'No invested capital remains. Return and exposure metrics are zero; minimum cash and liquidity requirements still apply.')
+    cvar_breached = any(c.controlName == 'maxCVaR' and c.status == 'BREACH' for c in controls)
+    operating_mode = 'DEFENSIVE' if (cvar_breached or drawdown > .20) else 'CAUTION' if any(c.status == 'BREACH' for c in controls) else 'NORMAL'
     return RiskReport(metrics=metrics, controls=controls, riskScore=score,
         riskLevel='LOW' if score < 25 else 'MODERATE' if score < 50 else 'HIGH' if score < 75 else 'CRITICAL',
+        operatingMode=operating_mode,
         components=components, explanations=explanations)

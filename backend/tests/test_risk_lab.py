@@ -53,7 +53,7 @@ def test_invalid_overrides(value):
 def test_unknown_holding():
     assert client.post('/api/simulate/custom',json={'assetShocks':{'bogus':1}}).status_code==422
 
-@pytest.mark.parametrize('scenario',['equity-rally','broad-market-stress','interest-rate','liquidity-crisis'])
+@pytest.mark.parametrize('scenario',['equity-rally','broad-market-stress','tech-selloff','inflation-shock','interest-rate','liquidity-crisis'])
 def test_preview_is_execution(scenario):
     preview=next(s for s in catalog(ASSETS) if s.id==scenario)
     result=client.post('/api/simulate',json={'scenarioId':scenario}).json()

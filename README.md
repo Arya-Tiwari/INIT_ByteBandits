@@ -1,6 +1,6 @@
-# CapitalGuard — Asset & Capital Optimization Control Engine
+# AEGIS — Automated Asset & Capital Optimization Control Engine
 
-Local hackathon MVP: actual deterministic portfolio risk calculations, eight configurable controls, six market scenarios, custom asset-class shocks and capital withdrawals. React + Vite + TypeScript + Tailwind + a shadcn-style Radix button + Recharts + Lucide; Python + FastAPI + NumPy/Pandas. SciPy provides the constrained rebalance solver; NumPy/Pandas provide the existing risk calculations.
+Local hackathon MVP: deterministic portfolio risk calculations, eight configurable controls, eight market scenarios, editable portfolio allocations, custom asset-class shocks and capital withdrawals. React + Vite + TypeScript + Tailwind + a shadcn-style Radix button + Recharts + Lucide; Python + FastAPI + NumPy/Pandas. SciPy provides the constrained rebalance solver; NumPy/Pandas provide the risk calculations.
 
 ## Run locally
 
@@ -36,7 +36,7 @@ cd frontend
 npm run build
 ```
 
-Tests cover all APIs and predefined scenarios, independently known VaR/CVaR/drawdown values, covariance aggregation, limit updates, finite outputs, custom class shocks, full wipeout, successful/failed withdrawals, weight normalization, value conservation and unchanged source holdings/history. The live smoke test also checks the Vite API proxy. `backend/requirements-lock.txt` records the tested Python 3.9 environment; `frontend/package-lock.json` locks frontend packages.
+Tests cover all APIs and predefined scenarios, editable portfolio allocations, independently known Sharpe/VaR/CVaR/drawdown values, covariance aggregation, limit updates, finite outputs, custom class shocks, full wipeout, successful/failed withdrawals, weight normalization, value conservation and unchanged source holdings/history. The live smoke test also checks the Vite API proxy. `backend/requirements-lock.txt` records the tested Python 3.9 environment; `frontend/package-lock.json` locks frontend packages.
 
 ## Files
 
@@ -81,7 +81,7 @@ The demo is deliberately overweight domestic equity (58%) with a 30% single posi
 
 ## APIs
 
-`GET /api/portfolio`, `GET /api/risk`, `GET /api/risk/limits`, `POST /api/risk/limits`, `GET /api/simulations`, `POST /api/simulate`, `POST /api/simulate/custom`, `POST /api/simulate/withdrawal`.
+`GET /api/portfolio`, `POST /api/portfolio`, `GET /api/risk`, `GET /api/risk/limits`, `POST /api/risk/limits`, `POST /api/optimize`, `GET /api/simulations`, `POST /api/simulate`, `POST /api/simulate/custom`, `POST /api/simulate/withdrawal`.
 
 ```sh
 curl -X POST http://127.0.0.1:8000/api/simulate \
@@ -95,12 +95,14 @@ curl -X POST http://127.0.0.1:8000/api/simulate/withdrawal \
 
 ## Risk Lab enhancements
 
-The Risk Lab is a page component inside the existing application shell, not a separate site. It receives portfolio/catalog props and calls the shared API client. The risk overview and configuration remain available. A reference-inspired glass theme uses horizontal navigation, scenario pills and compact assumption cards. Holding-level assumptions, Firewall explanations and the impact ledger use native expandable sections; custom overrides remain directly accessible. Predefined scenario assumptions come directly from the same backend resolver used to execute the shock.
+The Risk Lab is a page component inside the AEGIS application shell, not a separate site. It receives portfolio/catalog props and calls the shared API client. Its established scenario workflow remains intact inside the editorial report design. Holding-level assumptions, Firewall explanations and the impact ledger use native expandable sections; custom overrides remain directly accessible. Predefined scenario assumptions come directly from the same backend resolver used to execute the shock.
 
 Two new editable definitions in `backend/scenarios.py`:
 
 - Equity Rally: Equity +18%, International Equity +14%, REIT +8%, Corporate Bonds +2%, Government Bonds -2%, Gold -4%, Cash 0%.
 - Broad Market Stress: Equity -18%, International Equity -16%, REIT -20%, Corporate Bonds -9%, Government Bonds -6%, Gold -7%, Cash 0%.
+- Tech Selloff: Equity -8% by default, with the India Mid Cap holding explicitly overridden to -18%; International Equity -14%, REIT -5%, corporate bonds unchanged, government bonds +2%, Gold +1%, Cash 0%.
+- Inflation Shock: Equity -4%, International Equity -3%, REIT -5%, Corporate Bonds -7%, Government Bonds -9%, Gold +7%, Cash 0%.
 
 Class shocks and explicit per-holding overrides can be combined:
 

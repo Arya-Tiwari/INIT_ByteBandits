@@ -13,12 +13,42 @@ client = TestClient(app)
 @pytest.fixture(autouse=True)
 def reset_limits():
     client.post('/api/risk/limits',json=RiskLimits().model_dump())
+    defaults = {asset.id: asset.currentWeight for asset in ASSETS}
+    client.post('/api/portfolio',json={'allocations': defaults})
     yield
     client.post('/api/risk/limits',json=RiskLimits().model_dump())
+    client.post('/api/portfolio',json={'allocations': defaults})
 
 @pytest.mark.parametrize('path',['/api/portfolio','/api/risk','/api/risk/limits','/api/simulations','/openapi.json'])
 def test_get_endpoints(path):
     assert client.get(path).status_code == 200
+
+def test_current_portfolio_optimization_is_funded_and_read_only():
+    before = [asset.model_copy(deep=True) for asset in ASSETS]
+    response = client.post('/api/optimize').json()
+    assert response['status'] == 'FEASIBLE'
+    assert response['externalCapital'] == 0
+    buys = sum(t['amount'] for t in response['trades'] if t['action'] == 'BUY')
+    sells = sum(t['amount'] for t in response['trades'] if t['action'] == 'SELL')
+    assert buys == pytest.approx(sells, abs=.1)
+    assert ASSETS == before
+
+def test_portfolio_allocations_can_be_updated_and_recalculated():
+    allocations = {asset.id: asset.currentWeight for asset in ASSETS}
+    allocations['eq-large'] -= .05
+    allocations['cash'] += .05
+    response = client.post('/api/portfolio', json={'allocations': allocations})
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert sum(asset['currentWeight'] for asset in data['assets']) == pytest.approx(1)
+    assert sum(asset['currentValue'] for asset in data['assets']) == pytest.approx(data['totalValue'])
+    assert client.get('/api/risk').json()['metrics']['cashWeight'] == pytest.approx(.09)
+
+def test_invalid_portfolio_allocations_are_rejected():
+    assert client.post('/api/portfolio', json={'allocations': {'eq-large': .5}}).status_code == 422
+    invalid = {asset.id: asset.currentWeight for asset in ASSETS}
+    invalid['unknown'] = 0
+    assert client.post('/api/portfolio', json={'allocations': invalid}).status_code == 422
 
 def test_data_and_covariance():
     assert sum(a.currentWeight for a in ASSETS) == pytest.approx(1)
@@ -28,6 +58,7 @@ def test_data_and_covariance():
     expected = np.std(RETURNS.to_numpy() @ w,ddof=1)*np.sqrt(252)
     assert report.metrics.volatility == pytest.approx(expected)
     assert report.metrics.cvar95 >= report.metrics.var95 >= 0
+    assert report.metrics.sharpeRatio == pytest.approx((report.metrics.expectedReturn-.04)/report.metrics.volatility)
     assert report.riskScore == pytest.approx(sum(c.contribution for c in report.components),abs=.005)
 
 def test_known_losses_and_drawdown():

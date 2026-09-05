@@ -27,6 +27,7 @@ class RiskLimits(StrictModel):
     minimumLiquidityScore: float = Field(default=70, ge=0, le=100)
     minimumCashWeight: float = Field(default=.05, ge=0, le=1)
     maximumTurnover: float = Field(default=.20, gt=0, le=1)
+    riskAppetite: Optional[Literal['CONSERVATIVE', 'BALANCED', 'GROWTH']] = 'BALANCED'
 
 class Control(StrictModel):
     controlName: str
@@ -39,6 +40,7 @@ class Control(StrictModel):
 class Metrics(StrictModel):
     expectedReturn: float
     volatility: float
+    sharpeRatio: float
     var95: float
     cvar95: float
     maxDrawdown: float
@@ -62,6 +64,7 @@ class RiskReport(StrictModel):
     controls: list[Control]
     riskScore: float
     riskLevel: Literal['LOW','MODERATE','HIGH','CRITICAL']
+    operatingMode: Literal['NORMAL', 'CAUTION', 'DEFENSIVE'] = 'NORMAL'
     components: list[Component]
     explanations: list[str]
 
@@ -71,6 +74,29 @@ class Portfolio(StrictModel):
     currency: str = 'INR'
     historyObservations: int
 
+class RouteCapitalRequest(StrictModel):
+    incomingCapital: float = Field(gt=0)
+
+class RouteCapitalResponse(StrictModel):
+    routedToLiquidity: float
+    remainingCapital: float
+    updatedAssets: list[Asset]
+    totalValue: float
+
+class PortfolioAllocationRequest(StrictModel):
+    allocations: Optional[dict[str, float]] = None
+    totalValue: Optional[float] = Field(default=None, gt=0)
+    @model_validator(mode='after')
+    def valid_allocations(self):
+        if not self.allocations and self.totalValue is None:
+            raise ValueError('Provide allocation weights by holding ID or a total portfolio value.')
+        if self.allocations is not None:
+            if any(not math.isfinite(v) or v < 0 or v > 1 for v in self.allocations.values()):
+                raise ValueError('Allocation weights must be finite fractions from 0 to 1.')
+            if abs(sum(self.allocations.values()) - 1) > .001:
+                raise ValueError('Portfolio allocations must total 100% (tolerance 0.10%).')
+        return self
+
 class Scenario(StrictModel):
     id: str
     name: str
@@ -78,7 +104,7 @@ class Scenario(StrictModel):
     assumptions: list["ShockAssumption"] = Field(default_factory=list)
 
 class ScenarioRequest(StrictModel):
-    scenarioId: Literal['market-crash','interest-rate','liquidity-crisis','global-recession','equity-rally','broad-market-stress']
+    scenarioId: Literal['market-crash','tech-selloff','interest-rate','liquidity-crisis','inflation-shock','global-recession','equity-rally','broad-market-stress']
 
 class CustomRequest(StrictModel):
     name: str = Field(default='Custom Shock', min_length=1, max_length=80)
@@ -186,5 +212,6 @@ class RebalanceResult(StrictModel):
     totalValue: float
     externalCapital: float = 0
     limits: RiskLimits
+    costBenefit: Optional[dict[str, float]] = None
 
 Scenario.model_rebuild()

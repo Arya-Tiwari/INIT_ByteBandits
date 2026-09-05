@@ -7,10 +7,15 @@ from .models import Scenario, ShockAssumption
 DEFINITIONS = {
     'market-crash': dict(name='Market Crash', description='A sharp equity sell-off with defensive offsets.',
         shocks={'Equity':-25,'International Equity':-22,'REIT':-18,'Corporate Bonds':-5,'Government Bonds':3,'Gold':8,'Cash':0}),
+    'tech-selloff': dict(name='Tech Selloff', description='Growth-sensitive equity holdings fall while cash and high-quality bonds hold value.',
+        shocks={'Equity':-8,'International Equity':-14,'REIT':-5,'Corporate Bonds':0,'Government Bonds':2,'Gold':1,'Cash':0},
+        assetShocks={'eq-mid':-18}),
     'interest-rate': dict(name='Interest Rate Shock', description='A parallel 200 bp rise in rates.', rateChange=.02,
         shocks={'Equity':-8,'International Equity':-6,'REIT':-12,'Gold':-4,'Cash':0}),
     'liquidity-crisis': dict(name='Liquidity Crisis', description='Non-cash liquidity falls 40%; less-liquid assets lose more.', liquidityMultiplier=.6,
         baseLoss=.03, illiquidityLoss=.22, shocks={}),
+    'inflation-shock': dict(name='Inflation Shock', description='Higher inflation pressures bonds and property while gold provides a partial offset.',
+        shocks={'Equity':-4,'International Equity':-3,'REIT':-5,'Corporate Bonds':-7,'Government Bonds':-9,'Gold':7,'Cash':0}),
     'global-recession': dict(name='Global Recession', description='Risky assets decline; government bonds and gold gain.',
         shocks={'Equity':-15,'International Equity':-17,'REIT':-12,'Corporate Bonds':-4,'Government Bonds':4,'Gold':5,'Cash':0}),
     'equity-rally': dict(name='Equity Rally', description='Domestic and global equities rise; defensive assets lag.',
@@ -23,7 +28,7 @@ DEFINITIONS = {
 def assumptions(assets, scenario_id=None, shocks=None, asset_shocks=None):
     definition = DEFINITIONS[scenario_id] if scenario_id else {}
     defaults = definition.get('shocks', shocks or {})
-    overrides = asset_shocks or {}
+    overrides = {**definition.get('assetShocks', {}), **(asset_shocks or {})}
     unknown = set(overrides) - {a.id for a in assets}
     if unknown: raise ValueError('Unknown holding IDs: ' + ', '.join(sorted(unknown)))
     result = []
