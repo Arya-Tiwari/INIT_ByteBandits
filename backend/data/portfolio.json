@@ -1,0 +1,110 @@
+[
+  {
+    "id": "eq-large",
+    "name": "India Large Cap",
+    "ticker": "NIFTY50",
+    "assetClass": "Equity",
+    "currentValue": 150000000.0,
+    "currentWeight": 0.3,
+    "expectedReturn": 0.12,
+    "volatility": 0.21,
+    "liquidityScore": 92,
+    "duration": 0
+  },
+  {
+    "id": "eq-mid",
+    "name": "India Mid Cap",
+    "ticker": "MIDCAP",
+    "assetClass": "Equity",
+    "currentValue": 90000000.0,
+    "currentWeight": 0.18,
+    "expectedReturn": 0.14,
+    "volatility": 0.27,
+    "liquidityScore": 80,
+    "duration": 0
+  },
+  {
+    "id": "eq-bank",
+    "name": "Banking Basket",
+    "ticker": "BANKS",
+    "assetClass": "Equity",
+    "currentValue": 50000000.0,
+    "currentWeight": 0.1,
+    "expectedReturn": 0.13,
+    "volatility": 0.25,
+    "liquidityScore": 88,
+    "duration": 0
+  },
+  {
+    "id": "gov",
+    "name": "Government Securities",
+    "ticker": "GSEC10Y",
+    "assetClass": "Government Bonds",
+    "currentValue": 60000000.0,
+    "currentWeight": 0.12,
+    "expectedReturn": 0.065,
+    "volatility": 0.065,
+    "liquidityScore": 95,
+    "duration": 7.2
+  },
+  {
+    "id": "corp",
+    "name": "AAA Corporate Bonds",
+    "ticker": "AAA-BOND",
+    "assetClass": "Corporate Bonds",
+    "currentValue": 40000000.0,
+    "currentWeight": 0.08,
+    "expectedReturn": 0.078,
+    "volatility": 0.085,
+    "liquidityScore": 65,
+    "duration": 4.5
+  },
+  {
+    "id": "cash",
+    "name": "Treasury Cash",
+    "ticker": "CASH",
+    "assetClass": "Cash",
+    "currentValue": 20000000.0,
+    "currentWeight": 0.04,
+    "expectedReturn": 0.04,
+    "volatility": 0.002,
+    "liquidityScore": 100,
+    "duration": 0
+  },
+  {
+    "id": "gold",
+    "name": "Physical Gold ETF",
+    "ticker": "GOLD",
+    "assetClass": "Gold",
+    "currentValue": 30000000.0,
+    "currentWeight": 0.06,
+    "expectedReturn": 0.075,
+    "volatility": 0.16,
+    "liquidityScore": 90,
+    "duration": 0
+  },
+  {
+    "id": "reit",
+    "name": "Commercial Realty Trust",
+    "ticker": "REIT",
+    "assetClass": "REIT",
+    "currentValue": 25000000.0,
+    "currentWeight": 0.05,
+    "expectedReturn": 0.09,
+    "volatility": 0.2,
+    "liquidityScore": 45,
+    "duration": 0
+  },
+  {
+    "id": "intl",
+    "name": "Global Equity Index",
+    "ticker": "WORLD",
+    "assetClass": "International Equity",
+    "currentValue": 35000000.0,
+    "currentWeight": 0.07,
+    "expectedReturn": 0.1,
+    "volatility": 0.19,
+    "liquidityScore": 85,
+    "duration": 0
+  }
+]
