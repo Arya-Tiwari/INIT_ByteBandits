@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import {
   ArrowRight,
@@ -263,8 +263,9 @@ export function PortfolioPage({
   const [assumptions, setAssumptions] = useState<Record<string, AssetAssumptionUpdate>>({});
   const [totalCapCr, setTotalCapCr] = useState<number>(portfolio.totalValue / 1e7);
   const [incomingCapCr, setIncomingCapCr] = useState<number>(1.0);
-  const [showAdvanced, setShowAdvanced] = useState(true);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [newAssetName, setNewAssetName] = useState("");
   const [newAssetTicker, setNewAssetTicker] = useState("");
   const [newAssetClass, setNewAssetClass] = useState("Equity");
@@ -291,6 +292,14 @@ export function PortfolioPage({
   const [importText, setImportText] = useState("");
   const [importError, setImportError] = useState("");
   const [importing, setImporting] = useState(false);
+
+  function handleTriggerImport() {
+    setShowImportModal(true);
+    setShowAddModal(false);
+    setTimeout(() => {
+      fileInputRef.current?.click();
+    }, 10);
+  }
 
   function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -634,7 +643,7 @@ export function PortfolioPage({
           <Button type="button" onClick={() => { setShowAddModal(!showAddModal); setShowImportModal(false); }} style={{ fontSize: "13px", padding: "4px 12px" }}>
             {showAddModal ? "Cancel" : "+ Add Holding"}
           </Button>
-          <Button variant="outline" type="button" onClick={() => { setShowImportModal(!showImportModal); setShowAddModal(false); }} style={{ fontSize: "13px", padding: "4px 12px", display: "inline-flex", alignItems: "center", gap: "5px" }}>
+          <Button variant="outline" type="button" onClick={handleTriggerImport} style={{ fontSize: "13px", padding: "4px 12px", display: "inline-flex", alignItems: "center", gap: "5px" }}>
             <Upload size={14} /> Import Holdings
           </Button>
           <Button variant="outline" type="button" onClick={() => setShowAdvanced(!showAdvanced)} style={{ fontSize: "13px", padding: "4px 12px" }}>
@@ -655,8 +664,8 @@ export function PortfolioPage({
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
             <label style={{ fontSize: "12px", fontFamily: "var(--mono)", color: "var(--muted)", display: "flex", flexDirection: "column", gap: "4px" }}>
-              Upload CSV or JSON file:
-              <input type="file" accept=".csv,.json" onChange={handleFileUpload} style={{ padding: "6px", background: "white", borderRadius: "3px", border: "1px solid var(--rule)" }} />
+              Select CSV or JSON file:
+              <input ref={fileInputRef} type="file" accept=".csv,.json" onChange={handleFileUpload} style={{ padding: "6px", background: "white", borderRadius: "3px", border: "1px solid var(--rule)" }} />
             </label>
             <label style={{ fontSize: "12px", fontFamily: "var(--mono)", color: "var(--muted)", display: "flex", flexDirection: "column", gap: "4px" }}>
               Or paste raw CSV / JSON text content:

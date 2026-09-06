@@ -4,7 +4,6 @@ from threading import Lock
 from uuid import uuid4
 import pandas as pd
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from collections import OrderedDict
 import numpy as np
@@ -20,13 +19,6 @@ ASSETS = [Asset.model_validate(a) for a in json.loads((DATA/'portfolio.json').re
 _assets = [asset.model_copy(deep=True) for asset in ASSETS]
 RETURNS = pd.read_csv(DATA/'historical_returns.csv',index_col='date')
 app = FastAPI(title='AEGIS',version='1.0.0')
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
-    allow_origin_regex=r"https://[a-zA-Z0-9-]+\.vercel\.app",
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 _limits = RiskLimits()
 _lock = Lock()
 _simulations = OrderedDict()
