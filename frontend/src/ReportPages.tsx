@@ -294,11 +294,7 @@ export function PortfolioPage({
   const [importing, setImporting] = useState(false);
 
   function handleTriggerImport() {
-    setShowImportModal(true);
-    setShowAddModal(false);
-    setTimeout(() => {
-      fileInputRef.current?.click();
-    }, 10);
+    fileInputRef.current?.click();
   }
 
   function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -307,9 +303,14 @@ export function PortfolioPage({
     const reader = new FileReader();
     reader.onload = (event) => {
       const text = event.target?.result as string;
-      if (text) setImportText(text);
+      if (text) {
+        setImportText(text);
+        setShowImportModal(true);
+        setShowAddModal(false);
+      }
     };
     reader.readAsText(file);
+    e.target.value = "";
   }
 
   function handleDownloadTemplate() {
@@ -547,6 +548,7 @@ export function PortfolioPage({
 
   return (
     <div className="report-page">
+      <input ref={fileInputRef} type="file" accept=".csv,.json" onChange={handleFileUpload} style={{ display: "none" }} />
       <PageHeader eyebrow="PORTFOLIO HOLDINGS" title="Current asset inventory & capital setup" description="Configure total portfolio capital, route new incoming funds, and manage target allocations." />
 
       {/* Redesigned Top Summary Card */}
@@ -655,7 +657,7 @@ export function PortfolioPage({
       </div>
 
       {showImportModal && (
-        <div className="report-section" style={{ background: "var(--paper-deep)", padding: "1.25rem", borderRadius: "4px", border: "1px solid var(--rule)", marginBottom: "1.25rem" }}>
+        <div className="import-modal-panel" style={{ background: "var(--paper-deep)", padding: "1.25rem", borderRadius: "4px", border: "1px solid var(--rule)", marginBottom: "1.25rem", marginTop: "0.5rem" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
             <h3 style={{ margin: 0, fontSize: "14px", fontFamily: "var(--mono)", color: "var(--brown)" }}>Import Portfolio Holdings (CSV / JSON)</h3>
             <Button variant="outline" type="button" onClick={handleDownloadTemplate} style={{ fontSize: "12px", padding: "3px 10px", display: "inline-flex", alignItems: "center", gap: "5px" }}>
@@ -665,7 +667,7 @@ export function PortfolioPage({
           <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
             <label style={{ fontSize: "12px", fontFamily: "var(--mono)", color: "var(--muted)", display: "flex", flexDirection: "column", gap: "4px" }}>
               Select CSV or JSON file:
-              <input ref={fileInputRef} type="file" accept=".csv,.json" onChange={handleFileUpload} style={{ padding: "6px", background: "white", borderRadius: "3px", border: "1px solid var(--rule)" }} />
+              <input type="file" accept=".csv,.json" onChange={handleFileUpload} style={{ padding: "6px", background: "white", borderRadius: "3px", border: "1px solid var(--rule)" }} />
             </label>
             <label style={{ fontSize: "12px", fontFamily: "var(--mono)", color: "var(--muted)", display: "flex", flexDirection: "column", gap: "4px" }}>
               Or paste raw CSV / JSON text content:
@@ -691,7 +693,7 @@ export function PortfolioPage({
       )}
 
       {showAddModal && (
-        <div className="report-section" style={{ background: "var(--paper-deep)", padding: "1.25rem", borderRadius: "4px", border: "1px solid var(--rule)", marginBottom: "1.25rem" }}>
+        <div className="import-modal-panel" style={{ background: "var(--paper-deep)", padding: "1.25rem", borderRadius: "4px", border: "1px solid var(--rule)", marginBottom: "1.25rem", marginTop: "0.5rem" }}>
           <h3 style={{ margin: "0 0 12px", fontSize: "14px", fontFamily: "var(--mono)", color: "var(--brown)" }}>Add New Holding to Asset Catalog</h3>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: "12px", alignItems: "end" }}>
             <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "11.5px", fontFamily: "var(--mono)", color: "var(--muted)" }}>
