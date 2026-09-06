@@ -1,6 +1,7 @@
+const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 export async function api<T>(path: string, body?: unknown): Promise<T> {
   const r = await fetch(
-    "/api" + path,
+  API_BASE + "/api" + path,
     body === undefined
       ? {}
       : {
