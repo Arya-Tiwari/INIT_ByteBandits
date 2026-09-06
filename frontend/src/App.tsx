@@ -327,7 +327,7 @@ export default function App({ initialPage = "home" }: { initialPage?: PageKey })
         <div className="content">
           {error && <div role="alert" className="error">{error} <Button variant="outline" onClick={() => void load()}><RefreshCw size={16} />Retry connection</Button></div>}
           {!portfolio || !risk || !limits ? (
-            <section className="loading-report">{error ? "Start the local backend on port 8000, then retry." : "Loading portfolio and risk calculations…"}</section>
+            <section className="loading-report">{error ? "Unable to connect to the backend service. Please retry." : "Loading portfolio and risk calculations…"}</section>
           ) : (
             <>
               <div hidden={page !== "home"}><OverviewPage portfolio={portfolio} risk={risk} proposal={proposal} events={events} navigate={navigate} /></div>
