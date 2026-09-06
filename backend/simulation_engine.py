@@ -1,6 +1,6 @@
 """Scenario revaluation only: source portfolio and return history stay unchanged."""
 from collections import defaultdict
-from models import Asset, RiskLimits, Scenario, Impact, LiquidityImpact, SimulationResult
+from models import RiskLimits, Impact, LiquidityImpact, SimulationResult
 import firewall
 from scenarios import DEFINITIONS, assumptions
 
@@ -44,8 +44,8 @@ def simulate(assets, returns, limits: RiskLimits, scenario_id=None, name=None, s
     for a in asset_impacts:
         groups[a.assetClass][0] += a.originalValue; groups[a.assetClass][1] += a.stressedValue
     class_impacts = [impact(c,c,*v) for c,v in groups.items()]
-    largest = max(class_impacts,key=lambda a:a.absoluteLoss)
-    contributor = largest.name if largest.absoluteLoss > 0 else 'None'
+    largest = max(asset_impacts,key=lambda a:a.absoluteLoss, default=None)
+    contributor = largest.name if largest and largest.absoluteLoss > 0 else 'None'
     loss = original-total
     if withdrawal is not None:
         explanation = (f'Withdrawal of ₹{withdrawal/1e7:.2f} Cr is funded from cash then assets with liquidity scores ≥70. Remaining capital is ₹{total/1e7:.2f} Cr. The capital reduction is a withdrawal, not a market loss.' if fulfilled else f'Withdrawal cannot be funded: ₹{withdrawal/1e7:.2f} Cr requested versus ₹{available/1e7:.2f} Cr of eligible liquid capital. No assets were sold.')

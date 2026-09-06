@@ -1,11 +1,15 @@
 # AEGIS — Task Execution & Verification Log
 
+## Final audit supersedes the historical claims below
+
+See [AUDIT.md](AUDIT.md): the supplied hackathon brief is addressed by the tested local demo. Separately, the expanded internal PRD has 40 of 48 features implemented, 4 partial and 4 missing; 100 backend tests passed. Earlier milestone and timing records below are historical, not current coverage guarantees.
+
 ## 1. Overview & Verification Status
 
 This document tracks all completed engineering tasks, verification test runs, bug fixes, and optimization milestones for the AEGIS platform.
 
 ### Summary Status
-- **Core Requirements Implemented**: 48 of 48 Features (100% Complete)
+- **Original coverage claim**: 48 of 48; superseded by the final audit
 - **Pytest Suite Status**: 83 of 83 Tests Passing (`83 passed in 22.56s`)
 - **Live Proxy Smoke Test**: Passed (`smoke_live.py`)
 - **Frontend Production Build**: Clean Build (`0 errors`, main chunk 301 kB)

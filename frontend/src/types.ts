@@ -1,9 +1,10 @@
 export const FINANCE_TOOLTIPS = {
-  liquidity: "The percentage of capital that can be accessed quickly, such as cash or Treasury Bills.",
+  liquidity: "The capital-weighted holding liquidity score from 0 to 100; it is not a percentage of immediately redeemable capital.",
   volatility: "How sharply portfolio value can move up and down. Higher means less predictable.",
   valueAtRisk: "Estimated loss threshold in a normal bad period at the selected confidence level.",
   conditionalVaR: "Average loss during the worst periods beyond Value at Risk.",
   turnover: "The percentage of the portfolio that must be traded to reach the new allocation.",
+  concentration: "Herfindahl index: the sum of squared portfolio weights. A higher value means more concentrated capital.",
   safetyScore: "A 0-100 health score combining liquidity, concentration, tail risk, and drawdown controls.",
 };
 
@@ -226,7 +227,7 @@ export function exportRebalanceCsv(rebalance: Rebalance): string {
     ...rebalance.trades.map((t) =>
       [
         t.assetId,
-        `"${t.name}"`,
+        `"${t.name.replaceAll('"', '""')}"`,
         t.action,
         t.amount.toFixed(2),
         (t.targetWeight * 100).toFixed(2),

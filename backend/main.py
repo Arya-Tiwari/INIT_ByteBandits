@@ -1,6 +1,8 @@
 from pathlib import Path
 import json
-from threading import Lock
+from threading import RLock
+from functools import wraps
+import math
 from uuid import uuid4
 import pandas as pd
 from fastapi import FastAPI, HTTPException
@@ -13,15 +15,25 @@ from simulation_engine import simulate
 from scenarios import catalog
 from optimization_engine import optimize
 from market_simulation import run_market_simulation
+from historical_data import validate_returns
 
 DATA = Path(__file__).parent / 'data'
 ASSETS = [Asset.model_validate(a) for a in json.loads((DATA/'portfolio.json').read_text())]
 _assets = [asset.model_copy(deep=True) for asset in ASSETS]
 RETURNS = pd.read_csv(DATA/'historical_returns.csv',index_col='date')
+validate_returns(RETURNS, [asset.id for asset in ASSETS])
 app = FastAPI(title='AEGIS',version='1.0.0')
 _limits = RiskLimits()
-_lock = Lock()
+_lock = RLock()
 _simulations = OrderedDict()
+
+def consistent_state(function):
+    """Serialize local demo requests so mutations and cached analyses stay atomic."""
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        with _lock:
+            return function(*args, **kwargs)
+    return wrapped
 
 APPETITES = {
     'CONSERVATIVE': RiskLimits(maxPortfolioVolatility=0.12, maxVaR=0.012, maxCVaR=0.018, maxSingleAssetWeight=0.20, maxAssetClassWeight=0.40, minimumLiquidityScore=75, minimumCashWeight=0.08, maximumTurnover=0.15, riskAppetite='CONSERVATIVE'),
@@ -44,11 +56,13 @@ def assets_snapshot():
     with _lock: return [asset.model_copy(deep=True) for asset in _assets]
 
 @app.get('/api/portfolio',response_model=Portfolio)
+@consistent_state
 def portfolio():
     assets = assets_snapshot()
     return Portfolio(assets=assets,totalValue=sum(a.currentValue for a in assets),historyObservations=len(RETURNS))
 
 @app.post('/api/portfolio',response_model=Portfolio)
+@consistent_state
 def update_portfolio(request: PortfolioAllocationRequest):
     global _assets
     current = assets_snapshot()
@@ -93,6 +107,7 @@ def update_portfolio(request: PortfolioAllocationRequest):
     return Portfolio(assets=updated,totalValue=total,historyObservations=len(RETURNS))
 
 @app.post('/api/portfolio/add-asset', response_model=Portfolio)
+@consistent_state
 def add_asset(request: AddAssetRequest):
     global _assets, RETURNS
     current = assets_snapshot()
@@ -102,6 +117,8 @@ def add_asset(request: AddAssetRequest):
     
     val = request.currentValueCr * 1e7
     new_total = sum(a.currentValue for a in current) + val
+    if not math.isfinite(new_total):
+        raise HTTPException(status_code=422, detail='Total capital must remain finite.')
     
     r_annual = request.expectedReturnPercent / 100.0
     v_annual = request.volatilityPercent / 100.0
@@ -129,7 +146,7 @@ def add_asset(request: AddAssetRequest):
     factor = (loading[0]*market + loading[1]*rates + loading[2]*commodity +
               np.sqrt(max(0, 1.0 - sum(x*x for x in loading))) * rng.normal(0, 1, len(RETURNS)))
     
-    daily_returns = (r_annual / 252.0) + (v_annual / np.sqrt(252.0)) * factor
+    daily_returns = np.maximum(-.99, (r_annual / 252.0) + (v_annual / np.sqrt(252.0)) * factor)
     
     with _lock:
         RETURNS[new_id] = daily_returns
@@ -153,6 +170,7 @@ def add_asset(request: AddAssetRequest):
     return Portfolio(assets=_assets, totalValue=new_total, historyObservations=len(RETURNS))
 
 @app.post('/api/portfolio/route-capital', response_model=RouteCapitalResponse)
+@consistent_state
 def route_capital(request: RouteCapitalRequest):
     global _assets
     current = assets_snapshot()
@@ -162,6 +180,8 @@ def route_capital(request: RouteCapitalRequest):
     min_liq = limits.minimumLiquidityScore
     liquidity_before = report.metrics.liquidityScore
     new_total = total + request.incomingCapital
+    if not math.isfinite(new_total):
+        raise HTTPException(status_code=422, detail='Total capital must remain finite.')
     # Capital not used for repair follows the existing allocation and therefore
     # retains the current liquidity score. Solve the weighted-average equation
     # for the amount that must be placed in 100/100 Cash to reach the floor.
@@ -199,6 +219,7 @@ def route_capital(request: RouteCapitalRequest):
         liquidityRepaired=liquidity_after + 1e-8 >= min_liq)
 
 @app.post('/api/reset')
+@consistent_state
 def reset_demo():
     """Restore AEGIS to original hackathon demo baseline state."""
     global _assets, _limits
@@ -206,6 +227,7 @@ def reset_demo():
         _assets = [asset.model_copy(deep=True) for asset in ASSETS]
         _limits = RiskLimits()
         _simulations.clear()
+        RETURNS.drop(columns=[column for column in RETURNS if column not in {a.id for a in ASSETS}], inplace=True)
     clear_cache()
     current = assets_snapshot()
     limits = limits_snapshot()
@@ -217,6 +239,7 @@ def reset_demo():
     }
 
 @app.get('/api/risk',response_model=RiskReport)
+@consistent_state
 def risk():
     with _lock:
         if 'report' in _risk_cache:
@@ -227,12 +250,15 @@ def risk():
     return report
 
 @app.get('/api/risk/limits',response_model=RiskLimits)
+@consistent_state
 def get_limits(): return limits_snapshot()
 
 @app.get('/api/risk/appetites', response_model=dict[str, RiskLimits])
+@consistent_state
 def get_appetites(): return APPETITES
 
 @app.post('/api/risk/limits',response_model=RiskLimits)
+@consistent_state
 def update_limits(value: RiskLimits):
     global _limits
     with _lock: _limits = value.model_copy(deep=True)
@@ -240,10 +266,12 @@ def update_limits(value: RiskLimits):
     return value
 
 @app.get('/api/simulations',response_model=list[Scenario])
+@consistent_state
 def scenarios():
     return catalog(assets_snapshot())
 
 @app.post('/api/optimize',response_model=RebalanceResult)
+@consistent_state
 def optimize_portfolio():
     """Return a funded proposal for the current portfolio; never execute it."""
     with _lock:
@@ -257,10 +285,12 @@ def optimize_portfolio():
     return result
 
 @app.post('/api/simulate',response_model=SimulationResult)
+@consistent_state
 def predefined(request: ScenarioRequest):
     return remember(simulate(assets_snapshot(),RETURNS,limits_snapshot(),scenario_id=request.scenarioId))
 
 @app.post('/api/simulate/custom',response_model=SimulationResult)
+@consistent_state
 def custom(request: CustomRequest):
     try:
         return remember(simulate(assets_snapshot(),RETURNS,limits_snapshot(),name=request.name,shocks=request.shocks,asset_shocks=request.assetShocks))
@@ -268,12 +298,14 @@ def custom(request: CustomRequest):
         raise HTTPException(status_code=422,detail=str(exc))
 
 @app.post('/api/simulate/withdrawal',response_model=SimulationResult)
+@consistent_state
 def withdrawal(request: WithdrawalRequest):
     assets = assets_snapshot()
     amount = request.withdrawalAmount if request.withdrawalAmount is not None else sum(a.currentValue for a in assets)*request.withdrawalPercent/100
     return remember(simulate(assets,RETURNS,limits_snapshot(),withdrawal=amount))
 
 @app.post('/api/simulate/market', response_model=MarketSimulationResult)
+@consistent_state
 def market_simulation(request: MarketSimulationRequest):
     try:
         return run_market_simulation(assets_snapshot(), RETURNS, limits_snapshot(), request)
@@ -289,6 +321,7 @@ def remember(result):
     return result
 
 @app.post('/api/simulate/{simulation_id}/rebalance',response_model=RebalanceResult)
+@consistent_state
 def rebalance(simulation_id: str):
     with _lock:
         saved = _simulations.get(simulation_id)
@@ -302,13 +335,12 @@ def rebalance(simulation_id: str):
     # already-stressed portfolio returned above.
     baseline_target = None
     if saved.assumptions:
-        impacts = {impact.name: impact for impact in saved.assetImpacts}
         assumption_by_id = {assumption.assetId: assumption for assumption in saved.assumptions}
         current_assets = [asset.model_copy(update={
-            'currentValue': impacts[asset.name].originalValue,
-            'currentWeight': impacts[asset.name].originalWeight,
+            'currentValue': impact.originalValue,
+            'currentWeight': impact.originalWeight,
             'liquidityScore': assumption_by_id[asset.id].liquidityBefore,
-        }) for asset in saved.stressedAssets]
+        }) for asset, impact in zip(saved.stressedAssets, saved.assetImpacts)]
         baseline_target = optimize(current_assets, RETURNS, current_limits,
             original_capital=sum(a.currentValue for a in current_assets))
     result = optimize(saved.stressedAssets, RETURNS, current_limits,

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
+import { parseHoldingsImport } from "./holdingsImport";
 import {
   ArrowRight,
   Check,
@@ -7,9 +8,7 @@ import {
   ChevronUp,
   CircleAlert,
   Download,
-  FileSpreadsheet,
   Search,
-  ShieldAlert,
   ShieldCheck,
   SlidersHorizontal,
   Upload,
@@ -28,7 +27,7 @@ import {
 } from "recharts";
 import { Button } from "./components/ui/button";
 import { DEFAULT_LIMITS, REPORT_ASSUMPTIONS } from "./reportData";
-import { exportRebalanceCsv, type Asset, type AssetAssumptionUpdate, type Limits, type Portfolio, type PortfolioUpdate, type Rebalance, type Risk, type Simulation } from "./types";
+import { FINANCE_TOOLTIPS, exportRebalanceCsv, type Asset, type AssetAssumptionUpdate, type Limits, type Portfolio, type PortfolioUpdate, type Rebalance, type Risk, type Simulation } from "./types";
 
 export type PageKey =
   | "home"
@@ -124,7 +123,13 @@ function allocations(assets: Asset[]) {
 
 function metricValue(label: string, value: string | number, note?: string) {
   return (
-    <div className="report-metric" key={label}>
+    <div className="report-metric" key={label} title={({
+      "Liquidity": FINANCE_TOOLTIPS.liquidity,
+      "Volatility": FINANCE_TOOLTIPS.volatility,
+      "Portfolio risk": FINANCE_TOOLTIPS.volatility,
+      "Concentration": FINANCE_TOOLTIPS.concentration,
+      "Portfolio health": FINANCE_TOOLTIPS.safetyScore,
+    } as Record<string, string>)[label]}>
       <span>{label}</span>
       <strong style={numberStyle}>{value}</strong>
       {note && <small>{note}</small>}
@@ -182,7 +187,7 @@ function AegisMark({ size = 30 }: { size?: number }) {
 export function OverviewPage({ portfolio, risk, proposal, events, navigate }: { portfolio: Portfolio; risk: Risk; proposal?: Rebalance; events: DecisionEvent[]; navigate: (page: PageKey) => void }) {
   const breaches = risk.controls.filter((control) => control.status === "BREACH").length;
   const optimizedRisk = proposal?.risk?.riskScore;
-  const improvement = optimizedRisk == null ? null : (risk.riskScore - optimizedRisk) / risk.riskScore;
+  const improvement = optimizedRisk == null || !risk.riskScore ? null : (risk.riskScore - optimizedRisk) / risk.riskScore;
   const overall = breaches >= 3 || risk.riskLevel === "CRITICAL" ? "CRITICAL" : breaches || risk.riskLevel === "HIGH" ? "WARNING" : "STABLE";
   const mode = risk.operatingMode ?? (breaches ? "CAUTION" : "NORMAL");
 
@@ -287,6 +292,7 @@ export function PortfolioPage({
   const [search, setSearch] = useState("");
   const [validation, setValidation] = useState("");
   const [saved, setSaved] = useState(false);
+  const [mutating, setMutating] = useState(false);
 
   const [showImportModal, setShowImportModal] = useState(false);
   const [importText, setImportText] = useState("");
@@ -294,7 +300,8 @@ export function PortfolioPage({
   const [importing, setImporting] = useState(false);
 
   function handleTriggerImport() {
-    fileInputRef.current?.click();
+    setShowImportModal(true);
+    setShowAddModal(false);
   }
 
   function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -327,6 +334,7 @@ export function PortfolioPage({
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   }
 
   async function handleBatchImport() {
@@ -336,46 +344,12 @@ export function PortfolioPage({
     }
     setImportError("");
     setImporting(true);
+    let importedCount = 0;
     try {
-      let parsed: any[] = [];
-      const trimmed = importText.trim();
-      if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
-        const jsonRes = JSON.parse(trimmed);
-        parsed = Array.isArray(jsonRes) ? jsonRes : [jsonRes];
-      } else {
-        const lines = trimmed.split(/\r?\n/).filter((line) => line.trim().length > 0);
-        if (lines.length <= 1) {
-          throw new Error("CSV data must contain a header row and at least one asset row.");
-        }
-        for (let i = 1; i < lines.length; i++) {
-          const cols = lines[i].split(",").map((s) => s.trim());
-          if (cols.length < 4) continue;
-          parsed.push({
-            name: cols[0],
-            ticker: cols[1],
-            assetClass: cols[2] || "Equity",
-            currentValueCr: Number(cols[3]) || 1.0,
-            expectedReturnPercent: cols[4] != null ? Number(cols[4]) : 12.0,
-            volatilityPercent: cols[5] != null ? Number(cols[5]) : 18.0,
-            liquidityScore: cols[6] != null ? Number(cols[6]) : 80,
-          });
-        }
-      }
-
-      if (parsed.length === 0) {
-        throw new Error("No valid asset records found in import content.");
-      }
-
+      const parsed = parseHoldingsImport(importText, portfolio.assets.map((asset) => asset.ticker));
       for (const item of parsed) {
-        await api<Portfolio>("/portfolio/add-asset", {
-          name: item.name || "Imported Holding",
-          ticker: item.ticker || `IMP-${Math.floor(Math.random() * 1000)}`,
-          assetClass: item.assetClass || "Equity",
-          currentValueCr: Number(item.currentValueCr || item.valueCr || 1.0),
-          expectedReturnPercent: Number(item.expectedReturnPercent ?? item.expectedReturn ?? 12.0),
-          volatilityPercent: Number(item.volatilityPercent ?? item.volatility ?? 18.0),
-          liquidityScore: Number(item.liquidityScore ?? 80),
-        });
+        await api<Portfolio>("/portfolio/add-asset", item);
+        importedCount++;
       }
 
       if (onReload) await onReload();
@@ -385,18 +359,21 @@ export function PortfolioPage({
       setImportText("");
       setShowImportModal(false);
     } catch (err) {
-      setImportError((err as Error).message);
+      if (importedCount) await onReload?.();
+      setImportError(`${importedCount ? `${importedCount} holdings were saved before the failure. Remove those rows before retrying. ` : ""}${(err as Error).message}`);
     } finally {
       setImporting(false);
     }
   }
 
   async function handleAddAsset() {
+    if (busy || mutating || importing) return;
     if (!newAssetName.trim() || !newAssetTicker.trim()) {
       setValidation("Please enter asset name and ticker symbol.");
       return;
     }
     setValidation("");
+    setMutating(true);
     try {
       await api<Portfolio>("/portfolio/add-asset", {
         name: newAssetName.trim(),
@@ -415,7 +392,7 @@ export function PortfolioPage({
       await onReload?.();
     } catch (cause) {
       setValidation((cause as Error).message);
-    }
+    } finally { setMutating(false); }
   }
 
   useEffect(() => {
@@ -467,7 +444,8 @@ export function PortfolioPage({
     !Number.isFinite(value.liquidityScore) || value.liquidityScore < 0 || value.liquidityScore > 100 ||
     !Number.isFinite(value.duration) || value.duration < 0 || value.duration > 100
   );
-  const portfolioInvalid = !Number.isFinite(totalCapCr) || totalCapCr <= 0 || isOverAllocated || invalidAssumptions;
+  const invalidWeights = Object.values(draft).some((weight) => !Number.isFinite(weight) || weight < 0 || weight > 1);
+  const portfolioInvalid = invalidWeights || !Number.isFinite(totalCapCr) || totalCapCr <= 0 || isOverAllocated || invalidAssumptions;
 
   function updateAssumption(assetId: string, key: keyof AssetAssumptionUpdate, value: number) {
     setSaved(false);
@@ -509,7 +487,8 @@ export function PortfolioPage({
   }
 
   async function handleRouteCapital() {
-    if (incomingCapCr <= 0) return;
+    if (busy || mutating || importing || !Number.isFinite(incomingCapCr) || incomingCapCr <= 0) return;
+    setMutating(true);
     const incVal = incomingCapCr * 1e7;
     try {
       const res = await api<{
@@ -542,8 +521,8 @@ export function PortfolioPage({
         );
       }
     } catch (err) {
-      alert((err as Error).message);
-    }
+      setValidation((err as Error).message);
+    } finally { setMutating(false); }
   }
 
   return (
@@ -618,7 +597,7 @@ export function PortfolioPage({
               style={{ width: "130px", padding: "6px 12px", borderRadius: "3px", border: "1px solid var(--rule)", fontFamily: "var(--mono)", fontWeight: "600" }}
             />
           </label>
-          <Button disabled={busy || incomingCapCr <= 0} onClick={() => void handleRouteCapital()}>
+          <Button disabled={mutating || importing || busy || incomingCapCr <= 0} onClick={() => void handleRouteCapital()}>
             {busy ? "Routing…" : "Route Capital"}
           </Button>
         </div>
@@ -728,7 +707,7 @@ export function PortfolioPage({
               Liquidity (0-100)
               <input type="number" min="0" max="100" value={newAssetLiq} onChange={(e) => setNewAssetLiq(Number(e.target.value))} style={{ padding: "5px 8px", borderRadius: "3px", border: "1px solid var(--rule)" }} />
             </label>
-            <Button disabled={busy} onClick={() => void handleAddAsset()} style={{ padding: "6px 14px" }}>
+            <Button disabled={mutating || importing || busy} onClick={() => void handleAddAsset()} style={{ padding: "6px 14px" }}>
               {busy ? "Adding…" : "Save New Asset"}
             </Button>
           </div>
@@ -854,11 +833,11 @@ export function PortfolioPage({
         </div>
         <div style={{ display: "flex", gap: "0.75rem" }}>
           {onReset && (
-            <Button variant="outline" type="button" disabled={busy} onClick={() => void onReset()}>
+            <Button variant="outline" type="button" disabled={mutating || importing || busy} onClick={() => void onReset()}>
               Reset Demo
             </Button>
           )}
-          <Button disabled={busy || portfolioInvalid} onClick={() => void handleSave()}>
+          <Button disabled={mutating || importing || busy || portfolioInvalid} onClick={() => void handleSave()}>
             {busy ? "Saving…" : "Save & Recalculate"}
           </Button>
         </div>
@@ -910,7 +889,7 @@ export function RiskPage({
                 <tr key={control.controlName}>
                   <td>
                     <div className="control-table-cell">
-                      <strong className="control-table-name">{controlNames[control.controlName]}</strong>
+                      <strong className="control-table-name" title={controlHelp[control.controlName]}>{controlNames[control.controlName]}</strong>
                       <span className="control-table-explanation">{control.explanation}</span>
                       {control.remediation && control.status !== "PASS" && (
                         <div className="control-remediation-box">
@@ -932,24 +911,23 @@ export function RiskPage({
       </section>
       <div className="report-two-column risk-detail-grid">
         <section className="report-section"><SectionHeader index="02" title="Portfolio health score" note={`${risk.portfolioScore.toFixed(1)} / 100`} /><div className="risk-bars">{Object.entries(risk.scoreComponents).map(([name, points]) => <div key={name}><span>{name}</span><div><i style={{ width: `${Math.min(100, points / ({ "Risk compliance": 30, "Diversification": 20, "Liquidity": 15, "Volatility / risk": 20, "Historical resilience": 15 }[name] ?? 20) * 100)}%` }} /></div><b>{points.toFixed(1)} pts</b></div>)}</div></section>
-        <section className="report-section explanation-report"><SectionHeader index="03" title="Why the risk is high" />{risk.explanations.map((explanation, index) => <p key={index}><span>{String(index + 1).padStart(2, "0")}</span>{explanation}</p>)}</section>
+        <section className="report-section explanation-report"><SectionHeader index="03" title="Risk explanations" />{risk.explanations.map((explanation, index) => <p key={index}><span>{String(index + 1).padStart(2, "0")}</span>{explanation}</p>)}</section>
       </div>
       <ControlsPage limits={limits} appetites={appetites} busy={busy} save={save} embedded />
     </div>
   );
 }
 
-function planMetrics(portfolio: Portfolio, risk: Risk, proposal?: Rebalance) {
+function planMetrics(portfolio: Portfolio, proposal?: Rebalance) {
   const target = targetAssets(portfolio, proposal);
-  const expectedReturn = target.reduce((sum, asset) => sum + asset.currentWeight * asset.expectedReturn, 0);
-  const traded = proposal?.trades.reduce((sum, trade) => sum + (trade.action === "HOLD" ? 0 : trade.amount), 0) ?? 0;
-  return { target, expectedReturn, cost: traded * REPORT_ASSUMPTIONS.transactionCostRate };
+  const expectedReturn = proposal?.risk?.metrics.expectedReturn ?? 0;
+  return { target, expectedReturn };
 }
 
 export function OptimizationPage({ portfolio, risk, proposal, simulation, busy, run, navigate }: { portfolio: Portfolio; risk: Risk; proposal?: Rebalance; simulation?: Simulation; busy: boolean; run: () => void; navigate: (page: PageKey) => void }) {
   const sourcePortfolio = simulation ? { ...portfolio, assets: simulation.stressedAssets, totalValue: simulation.stressedPortfolioValue } : portfolio;
   const sourceRisk = simulation?.riskAfter ?? risk;
-  const plan = planMetrics(sourcePortfolio, sourceRisk, proposal);
+  const plan = planMetrics(sourcePortfolio, proposal);
   const current = allocations(sourcePortfolio.assets);
   const target = allocations(plan.target);
   const comparison = current.map((row) => ({ name: row.name, Current: row.weight * 100, Target: (target.find((item) => item.name === row.name)?.weight ?? row.weight) * 100 }));
@@ -1056,7 +1034,7 @@ export function RecommendationsPage({ portfolio, risk, proposal, simulation, nav
   const actions = trades.filter((trade) => trade.action !== "HOLD");
   const reduction = proposal?.risk && sourceRisk.riskScore ? (sourceRisk.riskScore - proposal.risk.riskScore) / sourceRisk.riskScore : 0;
   const cb = proposal?.costBenefit;
-  const cost = cb?.transactionCost ?? (actions.reduce((sum, trade) => sum + trade.amount, 0) * REPORT_ASSUMPTIONS.transactionCostRate);
+  const cost = cb?.transactionCost ?? (actions.reduce((sum, trade) => sum + trade.amount, 0) * .5 * REPORT_ASSUMPTIONS.transactionCostRate);
 
   function downloadCsv() {
     if (!proposal) return;
@@ -1069,6 +1047,7 @@ export function RecommendationsPage({ portfolio, risk, proposal, simulation, nav
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   }
 
   return (
@@ -1162,8 +1141,10 @@ export function ControlsPage({
       setDraft(next);
       setSaved(false);
       setValidation("");
-      await save(next);
-      setSaved(true);
+      try {
+        await save(next);
+        setSaved(true);
+      } catch (cause) { setValidation((cause as Error).message); }
     }
   }
 
@@ -1204,7 +1185,7 @@ export function ControlsPage({
       </div>
 
       <div className="controls-intro"><ShieldCheck size={23} /><p>Changes apply to this local session. Every proposal is rechecked against these controls before it is shown.</p></div>
-      <div className="control-groups">{limitGroups.map((group, groupIndex) => <section className="control-group" key={group.title}><SectionHeader index={String(groupIndex + 1).padStart(2, "0")} title={group.title} />{group.keys.map((key) => { const score = key === "minimumLiquidityScore"; const value = draft[key] ?? 0; return <label className="control-form-row" key={key}><div><strong>{controlNames[key]}</strong><p>{controlHelp[key]}</p></div><div><span>Current limit</span><div><input type="number" min="0" max="100" step="any" value={Number.isFinite(Number(value)) ? Number((value * (score ? 1 : 100)).toFixed(4)) : ""} onChange={(event) => { setSaved(false); setValidation(""); setDraft({ ...draft, [key]: event.target.value === "" ? Number.NaN : Number(event.target.value) / (score ? 1 : 100) }); }} /><small>{score ? "/ 100" : "%"}</small></div></div></label>; })}</section>)}</div>
+      <div className="control-groups">{limitGroups.map((group, groupIndex) => <section className="control-group" key={group.title}><SectionHeader index={String(groupIndex + 1).padStart(2, "0")} title={group.title} />{group.keys.map((key) => { const score = key === "minimumLiquidityScore"; const value = draft[key] ?? 0; return <label className="control-form-row" key={key}><div><strong title={controlHelp[key]}>{controlNames[key]}</strong><p>{controlHelp[key]}</p></div><div><span>Current limit</span><div><input type="number" min="0" max="100" step="any" value={Number.isFinite(Number(value)) ? Number((value * (score ? 1 : 100)).toFixed(4)) : ""} onChange={(event) => { setSaved(false); setValidation(""); setDraft({ ...draft, [key]: event.target.value === "" ? Number.NaN : Number(event.target.value) / (score ? 1 : 100) }); }} /><small>{score ? "/ 100" : "%"}</small></div></div></label>; })}</section>)}</div>
       <div className="sticky-form-actions"><div>{saved && <span><Check size={15} />Controls saved and risk recalculated</span>}{validation && <small className="negative">{validation}</small>}</div><Button variant="outline" type="button" onClick={() => { setSaved(false); setValidation(""); setDraft({ ...DEFAULT_LIMITS }); }}>Reset defaults</Button><Button disabled={busy || invalidLimits} type="button" onClick={() => void submit()}>{busy ? "Applying…" : "Apply controls"}</Button></div>
     </div>
   );

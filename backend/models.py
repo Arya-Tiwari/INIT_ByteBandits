@@ -142,8 +142,7 @@ class CustomRequest(StrictModel):
     assetShocks: dict[str, float] = Field(default_factory=dict)
     @model_validator(mode='after')
     def check_shocks(self):
-        classes = {'Equity','International Equity','REIT','Corporate Bonds','Government Bonds','Gold','Cash'}
-        if not (self.shocks or self.assetShocks) or set(self.shocks) - classes:
+        if not (self.shocks or self.assetShocks):
             raise ValueError('Provide class defaults or asset overrides using known classes/holding IDs.')
         if any(not math.isfinite(v) or v < -100 or v > 10000 for v in [*self.shocks.values(), *self.assetShocks.values()]):
             raise ValueError('Shocks must be finite percentages from -100% to +10000% (demo safety cap).')

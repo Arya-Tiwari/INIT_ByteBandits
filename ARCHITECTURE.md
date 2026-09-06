@@ -4,11 +4,11 @@
 
 **AEGIS** (The Capital Compass & Institutional Risk Firewall) is a high-performance portfolio risk management, stress-testing, and capital allocation optimization platform. 
 
-The architecture consists of a **FastAPI (Python 3.9+) analytical engine** connected to a **React 18 + TypeScript multi-page frontend**. The platform features real-time risk control evaluations, two-phase constrained quadratic portfolio optimization, factor-based return simulation, Monte Carlo stress testing, and capital routing algorithms.
+The architecture consists of a **FastAPI (Python 3.9+) analytical engine** connected to a **React 19 + TypeScript multi-page frontend**. The platform features real-time risk control evaluations, two-phase constrained quadratic portfolio optimization, factor-based return simulation, Monte Carlo stress testing, and capital routing algorithms.
 
 ```mermaid
 graph TD
-    subgraph Frontend Layer [React 18 + TypeScript + Vite]
+    subgraph Frontend Layer [React 19 + TypeScript + Vite]
         UI[App Shell & Multi-page Navigation]
         Pages[Overview / Portfolio / Risk / Optimize / Simulation / Rebalance]
         APIClient[Typed Fetch API Client api.ts]
@@ -17,7 +17,7 @@ graph TD
 
     subgraph API Layer [FastAPI Application - backend/main.py]
         Router[REST Router & Endpoints]
-        Cache[In-Memory LRU Result Cache]
+        Cache[In-Memory Result Cache]
         StateLock[Thread Safety Lock]
     end
 
@@ -59,8 +59,8 @@ graph TD
 
 #### 1. API Controller (`backend/main.py`)
 - **FastAPI REST API**: Serves endpoints for portfolio management, live risk reporting, limit configuration, optimization, scenario simulations, capital routing, and asset creation.
-- **LRU In-Memory Caching**: Caches `/api/risk` and `/api/optimize` evaluation results. Automatically invalidates caches whenever portfolio allocations or risk limits are mutated, delivering **< 1ms** cached response times.
-- **Thread Safety**: Uses Python `threading.Lock` to guarantee atomic operations across requests.
+- **Single-result In-Memory Caching**: Caches `/api/risk` and `/api/optimize` evaluation results. Automatically invalidates caches whenever portfolio allocations or risk limits are mutated, avoiding repeat solver work (see AUDIT.md for measurements).
+- **Thread Safety**: Uses Python `threading.RLock` to serialize local demo endpoint operations, including analyses and mutations. Long solver work queues other requests.
 
 #### 2. Risk Firewall & Metrics Engine (`backend/firewall.py`, `backend/risk_engine.py`)
 - **Safety Score (0–100)**: Evaluates weighted portfolio health across 5 risk components:
@@ -70,7 +70,7 @@ graph TD
   4. Portfolio Illiquidity Score (15%)
   5. Control Limit Violations & Warnings (15%)
 - **Tail Risk Metrics**: Computes annualized volatility ($\sqrt{252 \cdot w^T \Sigma w}$), 95% 1-day Value at Risk (VaR), Conditional VaR (CVaR / Expected Shortfall), and Maximum Drawdown.
-- **Policy Inspection**: Evaluates 7 configurable institutional limits (Single Asset Cap, Asset Class Cap, Volatility Floor/Cap, VaR Limit, CVaR Limit, Minimum Liquidity, Minimum Cash, Turnover Budget).
+- **Policy Inspection**: Evaluates 8 configurable institutional limits (Single Asset Cap, Asset Class Cap, Volatility Floor/Cap, VaR Limit, CVaR Limit, Minimum Liquidity, Minimum Cash, Turnover Budget).
 
 #### 3. Constrained Capital Optimizer (`backend/optimization_engine.py`)
 - **Phase 1 (Linear Feasibility)**: Uses `scipy.optimize.linprog` with the **HiGHS** LP solver to check feasibility under capital conservation, asset bounds, class caps, liquidity floors, cash reserves, and turnover constraints.
@@ -79,7 +79,7 @@ graph TD
 - **Explainable Trade Rationale**: Generates human-readable trade instructions (`BUY`, `SELL`, `HOLD`) paired with the exact policy constraint trigger for each trade.
 
 #### 4. Market & Monte Carlo Simulation Engine (`backend/market_simulation.py`, `backend/simulation_engine.py`)
-- **Stress Engines**: Supports Historical, Monte Carlo, and Hybrid stress simulations over user-defined time horizons (10 to 252 days).
+- **Stress Engines**: Supports Historical, Monte Carlo, and Hybrid stress simulations over user-defined time horizons (1 to 252 days).
 - **Factor Return Model**: Generates synthetic factor return series for dynamically added assets using loading vectors across Market, Interest Rates, Commodity factors, and idiosyncratic noise.
 
 ---
@@ -142,7 +142,7 @@ graph TD
 
 2. **Non-Blocking Asynchronous Data Fetching**:
    - Initial application load fetches portfolio, risk report, and limit snapshots in parallel.
-   - Optimization proposals are loaded asynchronously without blocking initial rendering.
+   - Optimization proposals are loaded asynchronously without blocking initial rendering. See AUDIT.md for in-sample simulation and session-history limitations.
 
 3. **Backend Response Caching**:
-   - In-memory caching for `/api/risk` and `/api/optimize` achieves **< 1ms** response time on repetitive queries.
+   - In-memory caching for `/api/risk` and `/api/optimize` avoids recalculation on repetitive queries; HTTP latency is measured separately.

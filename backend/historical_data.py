@@ -15,6 +15,8 @@ def validate_returns(returns: pd.DataFrame, asset_ids: list[str]) -> pd.DataFram
         raise ValueError('At least two historical observations are required.')
     if not np.isfinite(values).all():
         raise ValueError('Historical return data contains missing or non-finite values.')
+    if np.any(values < -1):
+        raise ValueError('Long-only historical returns cannot be below -100%.')
     return frame
 
 

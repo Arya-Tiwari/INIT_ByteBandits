@@ -15,28 +15,10 @@ from optimization_engine import optimize
 from scenarios import DEFINITIONS, assumptions
 
 
-CONTROL_FIELDS = (
-    ('maxPortfolioVolatility', 'maxPortfolioVolatility'),
-    ('maxVaR', 'maxVaR'),
-    ('maxCVaR', 'maxCVaR'),
-    ('maxSingleAssetWeight', 'maxSingleAssetWeight'),
-    ('maxAssetClassWeight', 'maxAssetClassWeight'),
-    ('minimumLiquidityScore', 'minimumLiquidityScore'),
-    ('minimumCashWeight', 'minimumCashWeight'),
-    ('maximumTurnover', 'maximumTurnover'),
-)
-
-
 def _rolling_paths(values: np.ndarray, horizon: int) -> np.ndarray:
     if len(values) < horizon:
         raise ValueError(f'The selected period has {len(values)} observations; at least {horizon} are required for a {horizon}-day simulation.')
     return np.stack([values[i:i + horizon] for i in range(len(values) - horizon + 1)])
-
-
-def _drawdown(path_returns: np.ndarray) -> np.ndarray:
-    wealth = np.cumprod(1 + path_returns, axis=1)
-    peaks = np.maximum.accumulate(np.concatenate([np.ones((len(wealth), 1)), wealth], axis=1), axis=1)[:, 1:]
-    return np.max(1 - wealth / peaks, axis=1)
 
 
 def _terminal_assets(paths: np.ndarray) -> np.ndarray:
@@ -53,7 +35,8 @@ def _breach_statistics(terminal: np.ndarray, assets, returns: pd.DataFrame, limi
     daily = returns.to_numpy(dtype=float) @ weights.T
     losses = -daily
     var = np.maximum(0., np.quantile(losses, .95, axis=0))
-    cvar = np.array([max(var[i], losses[:, i][losses[:, i] >= var[i] - 1e-15].mean()) for i in range(len(var))])
+    tail_thresholds = np.quantile(losses, .95, axis=0)
+    cvar = np.array([max(var[i], losses[:, i][losses[:, i] >= tail_thresholds[i]].mean()) for i in range(len(var))])
     max_single = weights.max(axis=1)
     classes = sorted({a.assetClass for a in assets})
     class_weights = np.column_stack([weights[:, [a.assetClass == cls for a in assets]].sum(axis=1) for cls in classes])
@@ -79,7 +62,11 @@ def _statistics(paths: np.ndarray, assets, returns: pd.DataFrame, limits, liquid
     weights = np.array([a.currentValue for a in assets], dtype=float)
     weights = weights / weights.sum()
     outcomes = terminal @ weights
-    portfolio_daily = np.einsum('rha,a->rh', paths, weights)
+    # Buy-and-hold wealth must match the compounded terminal holding values.
+    wealth = np.cumprod(1 + paths, axis=1) @ weights
+    wealth = np.concatenate([np.ones((len(paths), 1)), wealth], axis=1)
+    peaks = np.maximum.accumulate(wealth, axis=1)
+    drawdowns = 1 - wealth / peaks
     losses = -outcomes
     control_probs, any_prob, average = _breach_statistics(terminal, assets, returns, limits, liquidity)
     return SimulationStatistics(
@@ -89,7 +76,7 @@ def _statistics(paths: np.ndarray, assets, returns: pd.DataFrame, limits, liquid
         downside5=float(np.quantile(outcomes, .05)),
         var95=max(0., float(np.quantile(losses, .95))),
         worstLoss=max(0., float(losses.max())),
-        maxDrawdown=float(_drawdown(portfolio_daily).max()),
+        maxDrawdown=float(drawdowns.max()),
         probabilityAnyBreach=any_prob,
         averageBreaches=average,
         controlBreachProbabilities=control_probs,
@@ -97,6 +84,8 @@ def _statistics(paths: np.ndarray, assets, returns: pd.DataFrame, limits, liquid
 
 
 def run_market_simulation(assets, returns: pd.DataFrame, limits, request: MarketSimulationRequest) -> MarketSimulationResult:
+    if not assets or sum(a.currentValue for a in assets) <= 0:
+        raise ValueError('Market simulation requires a portfolio with positive capital.')
     asset_ids = [a.id for a in assets]
     validated = validate_returns(returns, asset_ids)
     selected = select_period(validated, request.startDate, request.endDate)

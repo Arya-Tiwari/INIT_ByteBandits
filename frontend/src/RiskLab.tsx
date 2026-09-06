@@ -178,7 +178,7 @@ function Comparison({ s, r }: { s: Simulation; r?: Rebalance }) {
 
 const marketMetrics: { key: keyof MarketSimulation["original"]; label: string; format: (value: number) => string }[] = [
   { key: "expectedReturn", label: "Expected period return", format: pct },
-  { key: "expectedLoss", label: "Average loss in losing paths", format: pct },
+  { key: "expectedLoss", label: "Average loss across all paths", format: pct },
   { key: "downside5", label: "5th percentile result", format: pct },
   { key: "var95", label: "Period VaR · 95%", format: pct },
   { key: "worstLoss", label: "Worst simulated loss", format: pct },
@@ -256,12 +256,16 @@ export default function RiskLab({
   onEvent,
   onSimulation,
   onProposal,
+  initialSimulation,
+  initialProposal,
 }: {
   portfolio: Portfolio;
   scenarios: Scenario[];
   onEvent?: (title: string, detail: string) => void;
   onSimulation?: (result?: Simulation) => void;
   onProposal?: (proposal?: Rebalance) => void;
+  initialSimulation?: Simulation;
+  initialProposal?: Rebalance;
 }) {
   const [simulationMode, setSimulationMode] = useState<"STRESS" | "HISTORICAL" | "MONTE_CARLO" | "HYBRID">("STRESS");
   const [selected, setSelected] = useState("market-crash"),
@@ -272,11 +276,12 @@ export default function RiskLab({
     [assetShocks, setAssetShocks] = useState<Record<string, string>>({}),
     [withdrawal, setWithdrawal] = useState("10"),
     [unit, setUnit] = useState("percent"),
-    [result, setResult] = useState<Simulation>(),
-    [proposal, setProposal] = useState<Rebalance>(),
+    [result, setResult] = useState<Simulation | undefined>(initialSimulation),
+    [proposal, setProposal] = useState<Rebalance | undefined>(initialProposal),
     [busy, setBusy] = useState<"run" | "rebalance" | null>(null),
     [error, setError] = useState("");
   const scenario = scenarios.find((s) => s.id === selected);
+  useEffect(() => { setResult(initialSimulation); setProposal(initialProposal); }, [initialSimulation, initialProposal]);
   const classes = [...new Set(portfolio.assets.map((a) => a.assetClass))];
   function invalidate() {
     setResult(undefined);
@@ -793,7 +798,7 @@ export default function RiskLab({
                   {proposal.scenarioComparison && <div className="proposal-stats">
                     <span>Current stress loss<b>{pct(proposal.scenarioComparison.currentLossPercent)}</b><small>{money(proposal.scenarioComparison.currentLoss)}</small></span>
                     <span>Proposed stress loss<b>{pct(proposal.scenarioComparison.optimizedLossPercent)}</b><small>{money(proposal.scenarioComparison.optimizedLoss)}</small></span>
-                    <span>Capital protected<b>{money(proposal.scenarioComparison.capitalProtected)}</b><small>Same shock · current vs proposed</small></span>
+                    <span>Capital protected<b>{proposal.scenarioComparison.capitalProtected < 0 ? "−" : ""}{money(proposal.scenarioComparison.capitalProtected)}</b><small>Same shock · current vs proposed</small></span>
                   </div>}
                   <div className="proposal-stats">
                     <span>

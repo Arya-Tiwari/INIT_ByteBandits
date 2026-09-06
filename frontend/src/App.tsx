@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Activity,
   BriefcaseBusiness,
@@ -67,15 +67,18 @@ function getIstDateStr(date = new Date()) {
   }).toUpperCase();
 }
 
-export default function App({ initialPage = "home" }: { initialPage?: PageKey }) {
-  const [page, setPage] = useState<PageKey>(initialPage);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+function AnalysisClock() {
   const [now, setNow] = useState(() => new Date());
-
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
+  return <span className="as-of">AS OF {getIstDateStr(now)} · {getIstTimeStr(now)} IST</span>;
+}
+
+export default function App({ initialPage = "home" }: { initialPage?: PageKey }) {
+  const [page, setPage] = useState<PageKey>(initialPage);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   function navigate(target: PageKey) {
     setPage(target);
@@ -88,15 +91,13 @@ export default function App({ initialPage = "home" }: { initialPage?: PageKey })
     }
   }
 
-  const currentDateStr = getIstDateStr(now);
-  const currentIstTimeStr = getIstTimeStr(now);
-
   const [portfolio, setPortfolio] = useState<Portfolio>();
   const [risk, setRisk] = useState<Risk>();
   const [limits, setLimits] = useState<Limits>();
   const [appetites, setAppetites] = useState<Record<string, Limits>>({});
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [proposal, setProposal] = useState<Rebalance>();
+  const requestEpoch = useRef(0);
   const [activeSimulation, setActiveSimulation] = useState<Simulation | undefined>(() => {
     try {
       const raw = sessionStorage.getItem("aegis_active_simulation");
@@ -105,7 +106,10 @@ export default function App({ initialPage = "home" }: { initialPage?: PageKey })
       return undefined;
     }
   });
-  const [stressProposal, setStressProposal] = useState<Rebalance>();
+  const [stressProposal, setStressProposal] = useState<Rebalance | undefined>(() => {
+    try { return JSON.parse(sessionStorage.getItem("aegis_stress_proposal") || "null") ?? undefined; }
+    catch { return undefined; }
+  });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [optimizing, setOptimizing] = useState(false);
@@ -123,11 +127,20 @@ export default function App({ initialPage = "home" }: { initialPage?: PageKey })
     try {
       if (activeSimulation) {
         sessionStorage.setItem("aegis_active_simulation", JSON.stringify(activeSimulation));
+        if (portfolio && limits) sessionStorage.setItem("aegis_simulation_context", JSON.stringify({ portfolio, limits }));
       } else {
         sessionStorage.removeItem("aegis_active_simulation");
+        sessionStorage.removeItem("aegis_simulation_context");
       }
     } catch {}
   }, [activeSimulation]);
+
+  useEffect(() => {
+    try {
+      if (stressProposal) sessionStorage.setItem("aegis_stress_proposal", JSON.stringify(stressProposal));
+      else sessionStorage.removeItem("aegis_stress_proposal");
+    } catch {}
+  }, [stressProposal]);
 
   useEffect(() => {
     try {
@@ -149,14 +162,18 @@ export default function App({ initialPage = "home" }: { initialPage?: PageKey })
       { threshold: 0.05, rootMargin: "0px 0px -30px 0px" }
     );
 
-    const timer = setTimeout(() => {
+    const observeElements = () => {
       const elements = document.querySelectorAll(selector);
       elements.forEach((el) => observer.observe(el));
-    }, 50);
+    };
+    const timer = setTimeout(observeElements, 50);
+    const mutations = new MutationObserver(observeElements);
+    mutations.observe(document.querySelector(".content")!, { childList: true, subtree: true });
 
     return () => {
       clearTimeout(timer);
       observer.disconnect();
+      mutations.disconnect();
     };
   }, [page, portfolio, risk, proposal, activeSimulation, events]);
 
@@ -167,14 +184,19 @@ export default function App({ initialPage = "home" }: { initialPage?: PageKey })
   }
 
   async function runOptimization() {
+    const epoch = requestEpoch.current;
     setOptimizing(true);
+    setError("");
     try {
       if (activeSimulation) {
         const next = await api<Rebalance>(`/simulate/${activeSimulation.simulationId}/rebalance`, {});
+        if (epoch !== requestEpoch.current) return;
         setStressProposal(next);
         recordEvent("Stress optimization completed", `${activeSimulation.scenarioName} was rebalanced from its stressed holdings and rechecked by the Risk Firewall.`);
       } else {
-        setProposal(await api<Rebalance>("/optimize", {}));
+        const next = await api<Rebalance>("/optimize", {});
+        if (epoch !== requestEpoch.current) return;
+        setProposal(next);
         recordEvent("Optimization completed", "A funded target allocation was rechecked by the Risk Firewall.");
       }
     } catch (cause) {
@@ -185,6 +207,8 @@ export default function App({ initialPage = "home" }: { initialPage?: PageKey })
   }
 
   async function resetDemo() {
+    requestEpoch.current++;
+    setProposal(undefined);
     setBusy(true);
     setError("");
     try {
@@ -208,8 +232,10 @@ export default function App({ initialPage = "home" }: { initialPage?: PageKey })
     }
   }
 
-  async function load() {
+  async function load(invalidateSaved = false) {
+    const epoch = ++requestEpoch.current;
     setBusy(true);
+    setProposal(undefined);
     setError("");
     try {
       const [nextPortfolio, nextRisk, nextLimits, nextScenarios, nextAppetites] = await Promise.all([
@@ -219,20 +245,25 @@ export default function App({ initialPage = "home" }: { initialPage?: PageKey })
         api<Scenario[]>("/simulations"),
         api<Record<string, Limits>>("/risk/appetites").catch(() => ({})),
       ]);
+      if (epoch !== requestEpoch.current) return;
       setPortfolio(nextPortfolio);
       setRisk(nextRisk);
       setLimits(nextLimits);
       setScenarios(nextScenarios);
       setAppetites(nextAppetites);
-      setActiveSimulation(undefined);
-      setStressProposal(undefined);
-      setLastAnalysis(new Date().toLocaleTimeString("en-IN", { hour12: false }));
+      let sameContext = false;
+      try { sameContext = sessionStorage.getItem("aegis_simulation_context") === JSON.stringify({ portfolio: nextPortfolio, limits: nextLimits }); } catch {}
+      if (invalidateSaved || !sameContext) {
+        setActiveSimulation(undefined);
+        setStressProposal(undefined);
+      }
+      setLastAnalysis(getIstTimeStr());
       // Non-blocking fetch of optimization proposal so initial page load renders instantly
-      api<Rebalance>("/optimize", {}).then(setProposal).catch(() => setProposal(undefined));
+      api<Rebalance>("/optimize", {}).then((next) => { if (epoch === requestEpoch.current) setProposal(next); }).catch(() => { if (epoch === requestEpoch.current) setProposal(undefined); });
     } catch (cause) {
       setError((cause as Error).message);
     } finally {
-      setBusy(false);
+      if (epoch === requestEpoch.current) setBusy(false);
     }
   }
 
@@ -247,6 +278,8 @@ export default function App({ initialPage = "home" }: { initialPage?: PageKey })
   }, [sidebarOpen]);
 
   async function saveLimits(nextLimits: Limits) {
+    requestEpoch.current++;
+    setProposal(undefined);
     setBusy(true);
     setError("");
     try {
@@ -266,6 +299,8 @@ export default function App({ initialPage = "home" }: { initialPage?: PageKey })
   }
 
   async function savePortfolio(payload: PortfolioUpdate) {
+    requestEpoch.current++;
+    setProposal(undefined);
     setBusy(true);
     setError("");
     try {
@@ -310,17 +345,17 @@ export default function App({ initialPage = "home" }: { initialPage?: PageKey })
             <button key={item} className={page === item ? "active" : ""} onClick={() => navigate(item)}><Icon size={19} />{label}</button>
           ))}
         </nav>
-        <div className="sidebar-foot"><span className="dot" />ENGINE STATUS · ACTIVE<p>LAST ANALYSIS · {lastAnalysis}</p></div>
+        <div className="sidebar-foot"><span className="dot" />ENGINE STATUS · {error ? "UNAVAILABLE" : busy ? "CHECKING" : risk ? "ACTIVE" : "WAITING"}<p>LAST ANALYSIS · {lastAnalysis}</p></div>
       </aside>
 
       <main>
         <header>
           <div className="header-context"><strong>{pageNames[page]}</strong><span>PORTFOLIO / AEG-001</span></div>
-          <div className="header-actions"><span className="as-of">AS OF {currentDateStr} · {currentIstTimeStr} IST</span><Button className="run-analysis" disabled={busy} onClick={() => void load()}><RefreshCw size={15} />Run analysis</Button></div>
+          <div className="header-actions"><AnalysisClock /><Button className="run-analysis" disabled={busy} onClick={() => void load()}><RefreshCw size={15} />Run analysis</Button></div>
         </header>
         <div className="control-status">
-          <span><i className="status-led safe" /> HISTORICAL DATA · {portfolio?.historyObservations ?? 756} OBS</span>
-          <span><i className="status-led safe" /> CONTROL ENGINE · ACTIVE</span>
+          <span><i className="status-led safe" /> SYNTHETIC HISTORY · {portfolio?.historyObservations ?? "—"} OBS</span>
+          <span><i className={`status-led ${error ? "breach" : "safe"}`} /> CONTROL ENGINE · {error ? "UNAVAILABLE" : busy ? "CHECKING" : risk ? "ACTIVE" : "WAITING"}</span>
           <span><i className={`status-led ${breachCount ? "breach" : "safe"}`} /> {breachCount} BREACHES DETECTED</span>
         </div>
 
@@ -331,7 +366,7 @@ export default function App({ initialPage = "home" }: { initialPage?: PageKey })
           ) : (
             <>
               <div hidden={page !== "home"}><OverviewPage portfolio={portfolio} risk={risk} proposal={proposal} events={events} navigate={navigate} /></div>
-              <div hidden={page !== "portfolio"}><PortfolioPage portfolio={portfolio} proposal={proposal} busy={busy} save={savePortfolio} onReset={resetDemo} onRecordEvent={recordEvent} onReload={load} /></div>
+              <div hidden={page !== "portfolio"}><PortfolioPage portfolio={portfolio} proposal={proposal} busy={busy} save={savePortfolio} onReset={resetDemo} onRecordEvent={recordEvent} onReload={() => load(true)} /></div>
               <div hidden={page !== "risk"}><RiskPage risk={risk} limits={limits} appetites={appetites} busy={busy} save={saveLimits} /></div>
               <div hidden={page !== "optimize"}><OptimizationPage portfolio={portfolio} risk={risk} proposal={activeSimulation ? stressProposal : proposal} simulation={activeSimulation} busy={optimizing} run={() => void runOptimization()} navigate={navigate} /></div>
               <div hidden={page !== "rebalance"}><RecommendationsPage portfolio={portfolio} risk={risk} proposal={activeSimulation ? stressProposal : proposal} simulation={activeSimulation} navigate={navigate} /></div>
@@ -340,11 +375,11 @@ export default function App({ initialPage = "home" }: { initialPage?: PageKey })
                     <div><h1>Scenario &amp; Optimisation Review</h1><p>Shock the holdings. Trace the breaches. Test a funded response.</p></div>
                     <div className="capital"><span>Current portfolio value</span><strong>{money(portfolio.totalValue)}</strong><small>{portfolio.assets.length} assets · {new Set(portfolio.assets.map((asset) => asset.assetClass)).size} asset classes</small></div>
                   </div>
-                  <div id="stress-lab"><RiskLab portfolio={portfolio} scenarios={scenarios} onEvent={recordEvent} onSimulation={(result) => { setActiveSimulation(result); setStressProposal(undefined); }} onProposal={setStressProposal} /></div>
+                  <div id="stress-lab"><RiskLab key={JSON.stringify({ portfolio, limits })} initialSimulation={activeSimulation} initialProposal={stressProposal} portfolio={portfolio} scenarios={scenarios} onEvent={recordEvent} onSimulation={(result) => { setActiveSimulation(result); setStressProposal(undefined); }} onProposal={setStressProposal} /></div>
               </div>
             </>
           )}
-          <footer>AEGIS · Capital Compass<span>{portfolio?.historyObservations ?? 756} daily observations</span></footer>
+          <footer>AEGIS · Capital Compass<span>{portfolio?.historyObservations ?? "—"} daily observations</span></footer>
         </div>
       </main>
     </div>

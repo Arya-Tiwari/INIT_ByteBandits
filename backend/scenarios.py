@@ -26,6 +26,8 @@ DEFINITIONS = {
 
 
 def assumptions(assets, scenario_id=None, shocks=None, asset_shocks=None):
+    if not scenario_id and set(shocks or {}) - {a.assetClass for a in assets}:
+        raise ValueError('Custom shocks must use asset classes in the current portfolio.')
     definition = DEFINITIONS[scenario_id] if scenario_id else {}
     defaults = definition.get('shocks', shocks or {})
     overrides = {**definition.get('assetShocks', {}), **(asset_shocks or {})}

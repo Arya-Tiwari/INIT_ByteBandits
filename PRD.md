@@ -30,7 +30,7 @@ AEGIS provides an institutional "Risk Firewall" that continuously monitors portf
 
 ## 3. MVP Scope & Delivered Requirements (48-Feature Matrix)
 
-The Minimum Viable Product (MVP) encompasses the core 48 features fully implemented, tested, and delivered:
+The following 48 features define an expanded internal product target, not the mandatory requirements of the supplied hackathon problem statement (`readme_fintech.md`). The final implementation audit is in AUDIT.md; this matrix does not imply that every feature is delivered.
 
 ### MVP Module 1: Dashboard, Risk Engine & Policy Firewall
 - **FR-01 (Executive Dashboard)**: Provide a centralized overview of total capital, safety score, active breaches, and recommended interventions.

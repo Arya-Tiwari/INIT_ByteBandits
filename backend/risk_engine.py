@@ -1,18 +1,17 @@
 """Deterministic long-only risk; rates are fractions, liquidity is 0–100."""
 import numpy as np
 import pandas as pd
-from models import Asset, RiskLimits, RiskReport, Metrics, Control, Component
+from models import Asset, RiskLimits, RiskReport, Metrics, Component
+from historical_data import validate_returns
 
 
 def evaluate(assets: list[Asset], returns: pd.DataFrame, limits: RiskLimits, turnover: float = 0) -> RiskReport:
     values = np.array([a.currentValue for a in assets], dtype=float)
     total = values.sum()
     weights = values / total if total > 0 else np.zeros(len(assets))
-    series = returns[[a.id for a in assets]].to_numpy(dtype=float)
-    if len(series) < 2 or not np.isfinite(series).all():
-        raise ValueError('At least two finite return observations are required.')
+    series = validate_returns(returns, [a.id for a in assets]).to_numpy(dtype=float)
     daily = series @ weights
-    covariance = np.atleast_2d(np.cov(series, rowvar=False, ddof=1))
+    covariance = np.atleast_2d(np.cov(series, rowvar=False, ddof=1)) if assets else np.zeros((0, 0))
     volatility = float(np.sqrt(max(0, weights @ covariance @ weights) * 252))
     losses = -daily
     var = max(0., float(np.quantile(losses, .95)))
@@ -23,16 +22,16 @@ def evaluate(assets: list[Asset], returns: pd.DataFrame, limits: RiskLimits, tur
     classes: dict[str, float] = {}
     for a, w in zip(assets, weights):
         classes[a.assetClass] = classes.get(a.assetClass, 0) + float(w)
-    largest_class = max(classes, key=classes.get)
-    largest_asset = assets[int(np.argmax(weights))]
+    largest_class = max(classes, key=classes.get) if classes else 'None'
+    largest_asset = assets[int(np.argmax(weights))] if assets else None
     liquidity = float(weights @ np.array([a.liquidityScore for a in assets]))
     expected_return = float(weights @ np.array([a.expectedReturn for a in assets]))
     sharpe = (expected_return - .04) / volatility if volatility > 0 else 0.
     metrics = Metrics(expectedReturn=expected_return,
         volatility=volatility, sharpeRatio=float(sharpe), var95=var, cvar95=cvar, maxDrawdown=drawdown,
         liquidityScore=liquidity, concentrationRisk=float(weights @ weights),
-        largestAssetExposure=float(max(weights)), largestAssetName=largest_asset.name,
-        largestAssetClassExposure=classes[largest_class], largestAssetClass=largest_class,
+        largestAssetExposure=float(max(weights, default=0)), largestAssetName=largest_asset.name if largest_asset else 'None',
+        largestAssetClassExposure=classes.get(largest_class, 0), largestAssetClass=largest_class,
         cashWeight=classes.get('Cash', 0), turnover=turnover)
     from firewall import check
     controls = check(metrics, limits)
@@ -44,7 +43,7 @@ def evaluate(assets: list[Asset], returns: pd.DataFrame, limits: RiskLimits, tur
         contribution=float(np.clip(v,0,1)*100*w)) for n,v,w in raw]
     score = round(sum(c.contribution for c in components), 2)
     explanations = [c.explanation for c in controls if c.status != 'PASS']
-    explanations += [f'{largest_class} is the largest asset class at {classes[largest_class]:.1%}.',
+    explanations += [f'{largest_class} is the largest asset class at {classes.get(largest_class, 0):.1%}.',
         f'Historical one-day expected shortfall is {cvar:.2%}; annualized volatility is {volatility:.2%}.']
     cvar_breached = any(c.controlName == 'maxCVaR' and c.status == 'BREACH' for c in controls)
     operating_mode = 'DEFENSIVE' if (cvar_breached or drawdown > .20) else 'CAUTION' if any(c.status == 'BREACH' for c in controls) else 'NORMAL'
