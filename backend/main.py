@@ -1,11 +1,13 @@
 from pathlib import Path
 import json
+import os
 from threading import RLock
 from functools import wraps
 import math
 from uuid import uuid4
 import pandas as pd
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from collections import OrderedDict
 import numpy as np
@@ -23,6 +25,16 @@ _assets = [asset.model_copy(deep=True) for asset in ASSETS]
 RETURNS = pd.read_csv(DATA/'historical_returns.csv',index_col='date')
 validate_returns(RETURNS, [asset.id for asset in ASSETS])
 app = FastAPI(title='AEGIS',version='1.0.0')
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        'http://localhost:5173',
+        'http://127.0.0.1:5173',
+        *[origin.strip().rstrip('/') for origin in os.getenv('FRONTEND_ORIGINS', '').split(',') if origin.strip()],
+    ],
+    allow_methods=['*'],
+    allow_headers=['*'],
+)
 _limits = RiskLimits()
 _lock = RLock()
 _simulations = OrderedDict()
