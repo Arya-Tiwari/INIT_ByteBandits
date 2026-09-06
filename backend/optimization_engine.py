@@ -7,8 +7,8 @@ Firewall recheck. Nonlinear solver failure is NOT a proof of infeasibility.
 """
 import numpy as np
 from scipy.optimize import linprog, minimize
-from . import firewall
-from .models import RebalanceResult, Trade
+import firewall
+from models import RebalanceResult, Trade
 
 TRADE_LIQUIDITY_FLOOR = 70
 MINIMUM_TRADE_AMOUNT = 1000.0  # INR, including cash movements

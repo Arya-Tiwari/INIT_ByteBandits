@@ -2,7 +2,7 @@
 
 Shocks are percentage points. Rate duration is a modified-duration approximation.
 """
-from .models import Scenario, ShockAssumption
+from models import Scenario, ShockAssumption
 
 DEFINITIONS = {
     'market-crash': dict(name='Market Crash', description='A sharp equity sell-off with defensive offsets.',

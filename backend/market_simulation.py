@@ -9,10 +9,10 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .historical_data import moments, select_period, validate_returns
-from .models import DecisionStep, MarketSimulationRequest, MarketSimulationResult, SimulationStatistics
-from .optimization_engine import optimize
-from .scenarios import DEFINITIONS, assumptions
+from historical_data import moments, select_period, validate_returns
+from models import DecisionStep, MarketSimulationRequest, MarketSimulationResult, SimulationStatistics
+from optimization_engine import optimize
+from scenarios import DEFINITIONS, assumptions
 
 
 CONTROL_FIELDS = (

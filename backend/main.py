@@ -7,12 +7,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from collections import OrderedDict
 import numpy as np
-from .models import Asset, Portfolio, PortfolioAllocationRequest, RiskLimits, RiskReport, Scenario, ScenarioRequest, CustomRequest, WithdrawalRequest, SimulationResult, RebalanceResult, RouteCapitalRequest, RouteCapitalResponse, MarketSimulationRequest, MarketSimulationResult, AddAssetRequest
-from .risk_engine import evaluate
-from .simulation_engine import simulate
-from .scenarios import catalog
-from .optimization_engine import optimize
-from .market_simulation import run_market_simulation
+from models import Asset, Portfolio, PortfolioAllocationRequest, RiskLimits, RiskReport, Scenario, ScenarioRequest, CustomRequest, WithdrawalRequest, SimulationResult, RebalanceResult, RouteCapitalRequest, RouteCapitalResponse, MarketSimulationRequest, MarketSimulationResult, AddAssetRequest
+from risk_engine import evaluate
+from simulation_engine import simulate
+from scenarios import catalog
+from optimization_engine import optimize
+from market_simulation import run_market_simulation
 
 DATA = Path(__file__).parent / 'data'
 ASSETS = [Asset.model_validate(a) for a in json.loads((DATA/'portfolio.json').read_text())]

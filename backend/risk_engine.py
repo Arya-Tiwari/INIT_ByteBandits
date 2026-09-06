@@ -1,7 +1,7 @@
 """Deterministic long-only risk; rates are fractions, liquidity is 0–100."""
 import numpy as np
 import pandas as pd
-from .models import Asset, RiskLimits, RiskReport, Metrics, Control, Component
+from models import Asset, RiskLimits, RiskReport, Metrics, Control, Component
 
 
 def evaluate(assets: list[Asset], returns: pd.DataFrame, limits: RiskLimits, turnover: float = 0) -> RiskReport:
@@ -34,7 +34,7 @@ def evaluate(assets: list[Asset], returns: pd.DataFrame, limits: RiskLimits, tur
         largestAssetExposure=float(max(weights)), largestAssetName=largest_asset.name,
         largestAssetClassExposure=classes[largest_class], largestAssetClass=largest_class,
         cashWeight=classes.get('Cash', 0), turnover=turnover)
-    from .firewall import check
+    from firewall import check
     controls = check(metrics, limits)
     # Reference scales are absolute, so changing a limit cannot hide underlying risk.
     raw = [('Volatility', volatility / .30, .25), ('Tail loss', (var/.04 + cvar/.06)/2, .25),

@@ -1,8 +1,8 @@
 """Scenario revaluation only: source portfolio and return history stay unchanged."""
 from collections import defaultdict
-from .models import Asset, RiskLimits, Scenario, Impact, LiquidityImpact, SimulationResult
-from . import firewall
-from .scenarios import DEFINITIONS, assumptions
+from models import Asset, RiskLimits, Scenario, Impact, LiquidityImpact, SimulationResult
+import firewall
+from scenarios import DEFINITIONS, assumptions
 
 
 def liquid_capital(assets):

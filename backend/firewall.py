@@ -1,5 +1,5 @@
 """Shared policy definitions and breach transitions; no UI policy calculations."""
-from .models import Control
+from models import Control
 
 # key, metric field, display label, minimum rather than maximum
 POLICIES = (
@@ -63,13 +63,13 @@ def check(metrics, limits):
 
 def inspect_portfolio(assets, returns, limits, turnover=0):
     # Local import avoids a cycle: the risk engine delegates policy checks to this module.
-    from .risk_engine import evaluate
+    from risk_engine import evaluate
     return evaluate(assets, returns, limits, turnover)
 
 
 def transitions(before, after):
     """Include all controls; existing includes persistent but improving breaches."""
-    from .models import BreachTransition
+    from models import BreachTransition
     result = []
     for old, new in zip(before.controls, after.controls):
         was, now = old.status == 'BREACH', new.status == 'BREACH'

@@ -3,10 +3,10 @@ import numpy as np
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
-from backend.main import app, ASSETS, RETURNS
-from backend.models import RiskLimits
-from backend.risk_engine import evaluate
-from backend.simulation_engine import simulate
+from main import app, ASSETS, RETURNS
+from models import RiskLimits
+from risk_engine import evaluate
+from simulation_engine import simulate
 
 client = TestClient(app)
 

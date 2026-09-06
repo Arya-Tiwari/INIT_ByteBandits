@@ -3,12 +3,12 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
-from backend import firewall
-from backend.main import app, ASSETS, RETURNS
-from backend.models import RiskLimits
-from backend.scenarios import catalog
-from backend.simulation_engine import simulate
-from backend.optimization_engine import optimize
+import firewall
+from main import app, ASSETS, RETURNS
+from models import RiskLimits
+from scenarios import catalog
+from simulation_engine import simulate
+from optimization_engine import optimize
 
 client=TestClient(app)
 @pytest.fixture(autouse=True)
@@ -65,7 +65,7 @@ def test_preview_is_execution(scenario):
     if scenario=='broad-market-stress': assert result['marketLoss']>0
 
 def test_actual_stressed_portfolio_reaches_firewall():
-    with patch('backend.firewall.inspect_portfolio',wraps=firewall.inspect_portfolio) as spy:
+    with patch('firewall.inspect_portfolio',wraps=firewall.inspect_portfolio) as spy:
         result=simulate(ASSETS,RETURNS,RiskLimits(),scenario_id='liquidity-crisis')
         after=spy.call_args_list[1].args[0]
         assert [a.model_dump() for a in after]==[a.model_dump() for a in result.stressedAssets]
@@ -107,7 +107,7 @@ def test_ineligible_capital_is_not_sold():
 
 def test_optimizer_receives_saved_stressed_holdings_and_limits():
     response=client.post('/api/simulate',json={'scenarioId':'market-crash'}).json()
-    with patch('backend.main.optimize',wraps=optimize) as spy:
+    with patch('main.optimize',wraps=optimize) as spy:
         result=client.post('/api/simulate/'+response['simulationId']+'/rebalance',json={})
         assert result.status_code==200,result.text
         assert [a.model_dump() for a in spy.call_args.args[0]]==response['stressedAssets']
@@ -191,7 +191,7 @@ def test_minimum_trades_are_removed_from_holdings_and_rechecked(scenario):
 
 def test_threshold_cannot_turn_an_unfunded_repair_into_success():
     s = simulate(ASSETS, RETURNS, RiskLimits(), scenario_id='market-crash')
-    with patch('backend.optimization_engine.MINIMUM_TRADE_AMOUNT', 1_000_000_000):
+    with patch('optimization_engine.MINIMUM_TRADE_AMOUNT', 1_000_000_000):
         proposal = optimize(s.stressedAssets, RETURNS, s.limits, s.originalPortfolioValue)
     assert proposal.status == 'NOT_FOUND'
     assert proposal.trades == [] and proposal.risk is None
