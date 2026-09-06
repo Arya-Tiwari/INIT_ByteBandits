@@ -150,7 +150,7 @@ npm run build
 
 ## Audit scope and demo assumptions
 
-See [AUDIT.md](AUDIT.md) for the requirement-by-requirement checklist, fixes, verification evidence, remaining MVP gaps and demo walkthrough. The supplied hackathon problem statement (`readme_fintech.md`) is the submission reference: optimization with constraints, risk safeguards, an explanatory dashboard, and working/documented deliverables. The repository’s 48-feature matrix is an expanded internal target, not a mandatory hackathon checklist or a claim that every feature is complete.
+The supplied hackathon problem statement (`readme_fintech.md`) is the submission reference: optimization with constraints, risk safeguards, an explanatory dashboard, and working/documented deliverables. The repository’s 48-feature matrix is an expanded internal target, not a mandatory hackathon checklist or a claim that every feature is complete.
 
 - Prices/returns are synthetic, not live market data. Historical mode is an **in-sample rolling comparison**, not an out-of-sample backtest: the optimizer also sees the full reference history.
 - `riskScore` is a five-component pressure score (lower is safer); `portfolioScore` is a separate health score using compliance, diversification, liquidity, volatility and historical drawdown (higher is healthier).
